@@ -82,7 +82,7 @@ Semgrep, ZAP and Trivy are **not** installed locally: each one runs from its off
 Docker image, so the same commands work on Windows, Linux and in CI.
 
 ```bash
-git clone <this repo> smartvuln && cd smartvuln
+git clone https://github.com/ImeeneLaad/SmartVuln.git smartvuln && cd smartvuln
 python -m venv .venv
 . .venv/bin/activate            # Windows: .venv\Scripts\activate
 pip install -r requirements-dev.txt
