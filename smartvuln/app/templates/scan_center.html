@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+{% block title %}Scan Center{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Scan Center</h1></div>
+
+<div class="grid split">
+  <div class="panel pad">
+    <label class="field" style="max-width:420px">Target
+      <select id="target">{% for t in targets %}<option value="{{ t.id }}" {{ 'selected' if t.id == selected_target }}>{{ t.name }}</option>{% endfor %}</select>
+    </label>
+    <dl class="kv small" id="targetInfo" style="margin-bottom:6px"><dt>Status</dt><dd class="muted">Checking…</dd></dl>
+
+    <h3 style="margin-top:18px">Scanners</h3>
+    <div id="scanners">
+      {% for name, info in scanner_info.items() %}
+      <label class="scanner-row">
+        <input type="checkbox" name="scanner" value="{{ name }}" checked>
+        <span><b>{{ info.label }}</b> <span class="type">{{ info.type }}</span><div class="what">{{ info.what }}</div></span>
+        <span class="small" id="ready-{{ name }}"></span>
+      </label>
+      {% endfor %}
+    </div>
+
+    <label class="field" style="margin-top:14px;max-width:420px">Scan name
+      <input id="label" maxlength="120" placeholder="Scan #1 — e.g. Before fixes">
+    </label>
+    <ul class="checks" id="problems" style="margin-bottom:10px"></ul>
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+      <button class="big" id="startBtn" type="button" disabled>Start scan</button>
+      <span id="startMsg" class="small"></span>
+    </div>
+  </div>
+
+  <aside class="panel pad">
+    <h3>Pre-flight</h3>
+    <ul class="checks" id="checks"><li class="muted">Checking…</li></ul>
+    <p class="small" style="margin:10px 0 0"><a href="#" id="recheck">Check again</a></p>
+  </aside>
+</div>
+
+<section id="live" style="display:none;margin-top:26px">
+  <div class="page-head" style="margin-bottom:10px">
+    <div><h2 style="margin:0">Scan <span id="liveTitle"></span></h2>
+      <div class="sub"><span id="liveStatus" class="status pending"></span> · <span id="livePhase"></span> · <span id="liveTimes"></span></div></div>
+    <div id="liveDone" class="small"></div>
+  </div>
+  <div class="progress" role="progressbar" aria-label="Scan progress"><div id="liveBar"></div></div>
+  <div class="table-wrap" style="margin-top:12px"><table class="data">
+    <thead><tr><th>Scanner</th><th>Status</th><th class="num">Findings</th><th class="num">Duration</th><th>Output</th></tr></thead>
+    <tbody id="runs"></tbody>
+  </table></div>
+  <details class="fold" id="logFold" open>
+    <summary>Execution log <span class="count" id="logCount"></span></summary>
+    <div class="console" id="console" aria-live="polite"></div>
+  </details>
+  <p class="small muted" style="margin-top:6px"><label><input type="checkbox" id="follow" checked> Follow output</label> · <a id="fullLogs" href="#">Full logs</a></p>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const csrf = document.querySelector('meta[name=csrf-token]').content;
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
+  const dur = s => s == null ? '—' : (s >= 60 ? Math.floor(s / 60) + 'm ' + String(Math.floor(s % 60)).padStart(2, '0') + 's' : Math.floor(s) + 's');
+  const FINISHED = ['completed', 'partial', 'failed', 'interrupted'];
+  let preflight = null, focus = {{ focus|tojson }}, lastLog = 0, timer = null;
+  const boxes = () => [...document.querySelectorAll('input[name=scanner]')];
+
+  /* Turn pre-flight data into short, actionable messages; technical details stay in a tooltip. */
+  function problems() {
+    if (!preflight) return [];
+    const out = [], t = preflight.target, name = $('target').selectedOptions[0].text.replace(/ \(.*\)$/, '');
+    const sel = boxes().filter(c => c.checked).map(c => c.value);
+    if (preflight.running_scan) out.push(['Scan #' + preflight.running_scan.id + ' is still running — wait for it to finish.', '']);
+    if (!preflight.docker.available) out.push(['Docker isn’t running. Start Docker Desktop, then check again.', preflight.docker.detail]);
+    if (!sel.length) out.push(['Select at least one scanner.', '']);
+    if (!t.source_present && sel.includes('semgrep')) out.push(['Source folder is missing: ' + t.source_path, '']);
+    if (!t.allowed && sel.includes('zap')) out.push(['This host is not in the allow-list, so ZAP will skip it.', '']);
+    else if (!t.reachable && sel.includes('zap')) out.push([name + ' isn’t responding — start it: docker compose up -d ' + t.id, t.probe]);
+    if (t.build && !t.build.current && (sel.includes('zap') || sel.includes('trivy')))
+      out.push(['The running app is older than its source — rebuild: docker compose up -d --build ' + t.id, '']);
+    return out;
+  }
+
+  function refreshStart() {
+    const p = problems();
+    const blocking = !preflight || preflight.running_scan || !preflight.docker.available || !boxes().some(c => c.checked);
+    $('startBtn').disabled = !!blocking;
+    $('problems').innerHTML = p.map(([msg, detail]) =>
+      '<li' + (detail ? ' title="' + esc(detail) + '"' : '') + '><span class="mark warn">!</span><span>' + esc(msg) + '</span></li>').join('');
+  }
+
+  async function loadPreflight() {
+    $('checks').innerHTML = '<li class="muted">Checking…</li>';
+    $('startBtn').disabled = true;
+    preflight = await (await fetch('/api/targets?target=' + encodeURIComponent($('target').value))).json();
+    const t = preflight.target, b = t.build;
+    $('targetInfo').innerHTML =
+      (t.browse_url ? '<dt>Open</dt><dd><a href="' + esc(t.browse_url) + '" target="_blank" rel="noopener">' + esc(t.browse_url) + '</a> ' +
+        (t.reachable ? '<span class="ok">● up</span>' : '<span class="bad">● down</span>') + '</dd>' : '') +
+      '<dt>Scanned as</dt><dd><span class="mono">' + esc(t.url) + '</span> <span class="muted">(inside Docker)</span>' +
+        (t.browse_url ? '' : ' ' + (t.reachable ? '<span class="ok">● up</span>' : '<span class="bad">● down</span>')) + '</dd>' +
+      '<dt>Source</dt><dd><span class="mono">' + esc(t.source_path) + '</span>' + (t.source_present ? ' <span class="muted">' + esc(t.source_ref) + '</span>' : ' <span class="bad">missing</span>') + '</dd>' +
+      '<dt>Image</dt><dd><span class="mono">' + esc(t.image) + '</span></dd>';
+    const docker = preflight.docker.available;
+    const checks = [  // [ok, text, technical detail for the tooltip]
+      [docker, docker ? 'Docker ' + preflight.docker.detail : 'Docker not running', docker ? '' : preflight.docker.detail],
+      [t.source_present, t.source_present ? 'Source present' : 'Source missing', ''],
+      [t.allowed, t.allowed ? 'Host in local allow-list' : 'Host not allowed', ''],
+      [t.reachable, t.reachable ? 'App responding' : 'App not responding', t.probe],
+    ];
+    if (b) checks.push([b.current, b.current ? 'Running build matches source' : 'Running build is out of date', '']);
+    for (const [name, s] of Object.entries(preflight.scanners)) {
+      $('ready-' + name).innerHTML = s.ready ? '<span class="ok">Ready</span>' : '<span class="bad">Not ready</span>';
+      const pending = docker && s.notes.some(n => /not pulled/.test(n));
+      checks.push([s.ready, s.label + (!docker ? ' — needs Docker' : pending ? ' — image downloads on first run' : ''), s.notes.join('; ')]);
+    }
+    $('checks').innerHTML = checks.map(([ok, txt, detail]) => '<li' + (detail ? ' title="' + esc(detail) + '"' : '') + '><span class="mark ' +
+      (ok ? 'ok">✓' : 'bad">✕') + '</span><span>' + esc(txt) + '</span></li>').join('');
+    refreshStart();
+  }
+
+  async function start() {
+    $('startBtn').disabled = true;
+    $('startMsg').textContent = 'Starting…';
+    const r = await fetch('/api/scans', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ target: $('target').value, scanners: boxes().filter(c => c.checked).map(c => c.value), label: $('label').value }) });
+    const data = await r.json().catch(() => ({}));
+    if (r.status === 202) { $('startMsg').textContent = ''; watch(data.scan_id, true); }
+    else { $('startMsg').innerHTML = '<span class="bad">' + esc(data.error || ('HTTP ' + r.status)) + '</span>'; if (data.running_scan) watch(data.running_scan, false); }
+    loadPreflight();
+  }
+
+  function render(s) {
+    $('live').style.display = '';
+    $('liveTitle').textContent = '#' + s.id + (s.label ? ' · ' + s.label : '');
+    $('liveStatus').className = 'status ' + s.status;
+    $('liveStatus').textContent = s.status[0].toUpperCase() + s.status.slice(1);
+    $('livePhase').textContent = s.phase || '';
+    $('liveTimes').textContent = dur(s.duration_s);
+    $('liveBar').style.width = Math.round((s.progress || 0) * 100) + '%';
+    $('runs').innerHTML = s.runs.map(r => {
+      const done = !['pending', 'running'].includes(r.status);
+      return '<tr><td><b>' + esc(r.label) + '</b> <span class="type">' + r.scan_type + '</span></td>' +
+        '<td><span class="status ' + r.status + '">' + esc(r.status_label) + '</span>' + (r.error ? '<div class="small bad">' + esc(r.error.slice(0, 200)) + '</div>' : '') + '</td>' +
+        '<td class="num">' + (done ? r.findings_count : '—') + '</td>' +
+        '<td class="num">' + (r.status === 'pending' ? '—' : dur(r.duration_s)) + '</td>' +
+        '<td class="small">' + r.raw_reports.map(n => '<a target="_blank" href="/raw/' + s.id + '/' + encodeURIComponent(n) + '">' + esc(n) + '</a>').join(', ') + '</td></tr>';
+    }).join('');
+    $('fullLogs').href = '/logs?scan=' + s.id;
+    if (FINISHED.includes(s.status)) {
+      const ok = s.status === 'completed' || s.status === 'partial';
+      $('liveDone').innerHTML = ok ? '<a class="btn" href="/?scan=' + s.id + '">View results</a>' : '<span class="bad">' + esc(s.error || s.status) + '</span>';
+    } else $('liveDone').textContent = '';
+  }
+
+  async function pollLogs(id) {
+    const lines = await (await fetch('/api/scans/' + id + '/logs?after=' + lastLog)).json();
+    if (!lines.length) return;
+    const con = $('console'), frag = document.createDocumentFragment();
+    for (const l of lines) {
+      const div = document.createElement('div');
+      div.innerHTML = '<span class="ts">' + esc(l.ts.slice(11, 19)) + '</span><span class="src ' + esc(l.source) + '">' + esc(l.source) + '</span> ';
+      div.appendChild(document.createTextNode(l.message));
+      frag.appendChild(div);
+      lastLog = l.id;
+    }
+    con.appendChild(frag);
+    $('logCount').textContent = con.childElementCount + ' lines';
+    if ($('follow').checked) con.scrollTop = con.scrollHeight;
+  }
+
+  async function poll(id) {
+    try {
+      const s = await (await fetch('/api/scans/' + id)).json();
+      render(s);
+      await pollLogs(id);
+      if (FINISHED.includes(s.status)) { clearInterval(timer); timer = null; await pollLogs(id); loadPreflight(); }
+    } catch (e) { console.error(e); }
+  }
+
+  function watch(id, reset) {
+    if (timer) clearInterval(timer);
+    if (reset || id !== focus) { lastLog = 0; $('console').innerHTML = ''; }
+    focus = id;
+    history.replaceState(null, '', '/scan?scan=' + id);
+    poll(id);
+    timer = setInterval(() => poll(id), 2000);
+  }
+
+  boxes().forEach(c => c.addEventListener('change', refreshStart));
+  /* Suggest the next per-target scan number as the name (used as-is if the field is left empty). */
+  const nextNumbers = {{ next_numbers|tojson }};
+  function suggestName() { $('label').placeholder = 'Scan #' + (nextNumbers[$('target').value] || 1) + ' — e.g. Before fixes'; }
+  $('target').addEventListener('change', () => { suggestName(); loadPreflight(); });
+  suggestName();
+  $('startBtn').addEventListener('click', start);
+  $('recheck').addEventListener('click', e => { e.preventDefault(); loadPreflight(); });
+  loadPreflight();
+  if (focus) watch(focus, true);
+})();
+</script>
+{% endblock %}

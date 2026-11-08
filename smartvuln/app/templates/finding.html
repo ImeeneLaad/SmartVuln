@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% from "_macros.html" import sev %}
+{% block title %}{{ f.title[:60] }}{% endblock %}
+{% block content %}
+<div class="small" style="margin-bottom:10px"><a href="{{ url_for('findings_view', scan=scan.id) }}">← Findings</a></div>
+<div class="page-head" style="align-items:flex-start">
+  <div>
+    <h1>{{ f.title }}</h1>
+    <div class="sub" style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-top:8px">
+      {{ sev(f.severity) }}
+      <span>{{ 'OWASP ZAP' if f.scanner == 'zap' else f.scanner|capitalize }} <span class="type">{{ f.scan_type }}</span></span>
+      <span>{{ f.category.replace('-', ' ') }}</span>
+      {% if f.cwe %}<span>{{ f.cwe|join(', ') }}</span>{% endif %}
+      {% if related %}<span class="chip accent">also reported by {{ related|map(attribute='scanner')|unique|reject('equalto', f.scanner)|join(', ') or 'the same scanner' }}</span>{% endif %}
+    </div>
+  </div>
+  <div style="text-align:right">
+    <div class="score" style="font-size:24px">{{ '%.0f'|format(f.risk_score) }}</div>
+    <div class="small muted">risk · {{ f.priority }}</div>
+  </div>
+</div>
+
+<div class="grid split">
+<div>
+  <div class="panel pad">
+    <h3>Where</h3>
+    <div class="loc" style="font-size:13px">{{ f.location }}</div>
+    {% if f.parameter %}<div class="small muted" style="margin-top:4px">parameter <code>{{ f.parameter }}</code></div>{% endif %}
+    {% if f.package_name %}<div class="small" style="margin-top:4px">{{ f.package_name }} {{ f.package_version }}{% if f.fixed_version %} → fixed in <b>{{ f.fixed_version }}</b>{% endif %}</div>{% endif %}
+    {% if snippet %}<div class="snippet" style="margin-top:10px">{% for n, line, hit in snippet %}<div class="{{ 'hit' if hit }}"><span class="ln">{{ n }}</span>{{ line }}</div>{% endfor %}</div>{% endif %}
+
+    <h3>What</h3>
+    <p style="white-space:pre-wrap">{{ f.description or '—' }}</p>
+
+    <h3>Fix</h3>
+    <p style="white-space:pre-wrap;margin:0">{{ f.remediation or '—' }}</p>
+  </div>
+
+  {% if f.evidence %}
+  <details class="fold" open><summary>Evidence</summary><div class="body"><pre>{{ f.evidence }}</pre></div></details>
+  {% endif %}
+
+  <details class="fold"><summary>Risk score <span class="count">{{ '%.1f'|format(f.risk_score) }}</span></summary><div class="body">
+    <table class="factors">
+      {% for x in f.risk_factors %}<tr><td>{{ x.factor.replace('_', ' ') }}</td><td class="v">{{ x.value }}</td><td>{{ x.reason }}</td></tr>{% endfor %}
+      <tr class="total"><td>score</td><td class="v">{{ '%.1f'|format(f.risk_score) }}</td><td>priority {{ f.priority }}</td></tr>
+    </table>
+  </div></details>
+
+  <details class="fold" {{ 'open' if related }}><summary>Related findings <span class="count">{{ related|length }}</span></summary>
+    {% if related %}
+    <div class="table-wrap"><table class="data">
+      <tbody>{% for r in related %}<tr><td>{{ sev(r.severity) }}</td>
+        <td class="title-cell"><a href="{{ url_for('finding_detail', finding_id=r.id, scan=scan.id) }}">{{ r.title[:100] }}</a><div class="meta">{{ 'OWASP ZAP' if r.scanner == 'zap' else r.scanner|capitalize }} · {{ r.scan_type }}</div></td>
+        <td class="loc">{{ r.location[:80] }}</td></tr>{% endfor %}</tbody>
+    </table></div>
+    <div class="body small muted" style="padding-top:10px">{% for r in f.correlation_reasons %}<div>{{ r }}</div>{% endfor %}</div>
+    {% else %}<div class="body small muted">No other finding matched on advisory, code location, endpoint or route handler.</div>{% endif %}
+  </details>
+
+  {% if f.references %}
+  <details class="fold"><summary>References <span class="count">{{ f.references|length }}</span></summary><div class="body small">
+    {% for r in f.references %}<div>{% if r.startswith('http') %}<a href="{{ r }}" rel="noopener noreferrer" target="_blank">{{ r }}</a>{% else %}{{ r }}{% endif %}</div>{% endfor %}
+  </div></details>
+  {% endif %}
+
+  <details class="fold"><summary>Original scanner record</summary><div class="body"><pre>{{ f.raw|pretty_json }}</pre></div></details>
+</div>
+
+<aside>
+  <div class="panel pad">
+    <h3>Triage</h3>
+    <p class="small">{{ f.triage_status.replace('_', ' ')|capitalize }}{% if f.triage_reason %}<br><span class="muted">{{ f.triage_reason }}</span>{% endif %}</p>
+    <form method="post" action="{{ url_for('triage', finding_id=f.id) }}">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}"><input type="hidden" name="scan" value="{{ scan.id }}">
+      <label class="field">Verdict<select name="status">
+        <option value="confirmed">Confirmed</option>
+        <option value="false_positive">False positive</option>
+        <option value="needs_verification">Needs verification</option></select></label>
+      <label class="field">Analyst<input name="analyst" required></label>
+      <label class="field">How was it verified?<textarea name="note" rows="3" required minlength="10"></textarea></label>
+      <button type="submit">Save verdict</button>
+    </form>
+    {% if log %}<h3>Verdicts</h3><div class="small">{% for l in log %}<div style="margin-bottom:6px">{{ l.created_at[:16].replace('T', ' ') }} · {{ l.analyst }} · <b>{{ l.status.replace('_', ' ') }}</b><br><span class="muted">{{ l.note }}</span></div>{% endfor %}</div>{% endif %}
+  </div>
+
+  <div class="panel pad" style="margin-top:14px">
+    <h3>Details</h3>
+    <dl class="kv small">
+      <dt>Rule</dt><dd class="mono">{{ f.rule_id }}</dd>
+      {% if f.cve %}<dt>Advisory</dt><dd>{{ f.cve|join(', ') }}</dd>{% endif %}
+      <dt>Confidence</dt><dd>{{ f.confidence or 'not provided' }}</dd>
+      {% if f.cvss_score is not none %}<dt>CVSS</dt><dd>{{ f.cvss_score }}</dd>{% endif %}
+      {% if f.target %}<dt>Target</dt><dd class="mono">{{ f.target }}</dd>{% endif %}
+      <dt>Fingerprint</dt><dd class="mono">{{ f.fingerprint }}</dd>
+      <dt>Group</dt><dd>{{ f.group_id }}{{ ' (primary)' if f.is_group_primary }}</dd>
+    </dl>
+    {% if history|length > 1 %}<h3>Seen in scans</h3><div class="small">{% for h in history %}<a href="{{ url_for('finding_detail', finding_id=f.id, scan=h.scan_id) }}">#{{ h.scan_id }}</a>{{ ', ' if not loop.last }}{% endfor %}</div>{% endif %}
+  </div>
+</aside>
+</div>
+{% endblock %}

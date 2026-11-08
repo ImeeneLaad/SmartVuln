@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% from "_macros.html" import finding_row, status, scan_picker with context %}
+{% block title %}Overview{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ target_name }}</h1>
+    <div class="sub">Scan #{{ scan.id }}{% if scan.label %} · {{ scan.label }}{% endif %} · {{ scan.started_at[:16].replace('T', ' ') }} UTC · {{ duration(scan)|dur }}{% if scan.source_ref %} · <span class="mono">{{ scan.source_ref }}</span>{% endif %}</div>
+  </div>
+  <div class="head-actions">
+    {{ scan_picker(scan, 'overview') }}
+    <a class="btn ghost" href="{{ url_for('report_file', scan_id=scan.id, name='report.html') }}" target="_blank">Report</a>
+    <a class="btn ghost" href="{{ url_for('logs_page', scan=scan.id) }}">Logs</a>
+  </div>
+</div>
+
+{% set total = primary|length %}
+<div class="metrics">
+  <div class="metric"><b>{{ total }}</b><span>Unique issues</span></div>
+  {% for s in severities %}<div class="metric {{ s }}"><b>{{ charts.severity[loop.index0] }}</b><span>{{ s|capitalize }}</span></div>{% endfor %}
+  <div class="metric"><b>{{ multi|length }}</b><span>Seen by 2+ scanners</span></div>
+</div>
+<div class="sevbar" role="img" aria-label="Severity distribution">
+  {% for s in severities %}{% set n = charts.severity[loop.index0] %}{% if n %}<span class="bg-{{ s }}" style="width: {{ 100 * n / total }}%" title="{{ s|capitalize }}: {{ n }}"></span>{% endif %}{% endfor %}
+</div>
+<div class="small muted" style="margin-top:6px">{{ findings|length }} raw findings, {{ findings|length - total }} grouped as duplicates.</div>
+
+<div class="grid cols-2" style="margin-top:20px">
+  <div class="panel pad">
+    <h3>Scanners</h3>
+    <table class="data" style="font-size:13px">
+      <tbody>
+      {% for r in scan.runs %}
+      <tr><td><b>{{ r.scanner|capitalize if r.scanner != 'zap' else 'OWASP ZAP' }}</b> <span class="type">{{ r.scan_type }}</span></td>
+        <td>{{ status(r.status, status_labels.get(r.status)) }}</td>
+        <td class="num">{{ r.findings_count }}</td>
+        <td class="num muted">{{ (r.duration_s or 0)|dur }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="panel pad">
+    <h3>Findings by scanner</h3>
+    <div class="chart short"><canvas id="cScanner" aria-label="Findings by scanner and severity"></canvas></div>
+  </div>
+</div>
+
+<div class="page-head" style="margin:28px 0 10px">
+  <h2 style="margin:0">Highest risk</h2>
+  <a class="small" href="{{ url_for('findings_view', scan=scan.id, primary=1) }}">All {{ total }} issues →</a>
+</div>
+<div class="table-wrap"><table class="data">
+  <thead><tr><th>Severity</th><th>Issue</th><th>Location</th><th>Detected by</th><th class="num">Risk</th></tr></thead>
+  <tbody>{% for f in top %}{{ finding_row(f, scan, by_id) }}{% endfor %}</tbody>
+</table></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+SV.chart(function () {
+  const d = {{ charts.scanner_sev|tojson }};
+  const scanners = Object.keys(d);
+  new Chart(cScanner, {
+    type: 'bar',
+    data: { labels: scanners.map(s => s === 'zap' ? 'OWASP ZAP' : s[0].toUpperCase() + s.slice(1)),
+            datasets: SV.sev.map(s => ({ label: s[0].toUpperCase() + s.slice(1), data: scanners.map(n => d[n][s] || 0),
+                                         backgroundColor: SV.color(s), barThickness: 16 })) },
+    options: { indexAxis: 'y', maintainAspectRatio: false,
+               plugins: { legend: { position: 'bottom' } },
+               scales: { x: { stacked: true, beginAtZero: true, ticks: { precision: 0 } }, y: { stacked: true, grid: { display: false } } } }
+  });
+});
+</script>
+{% endblock %}

@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Overview{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Overview</h1></div>
+<div class="metrics">
+  <div class="metric"><b>0</b><span>Unique issues</span></div>
+  {% for s in severities %}<div class="metric {{ s }}"><b>0</b><span>{{ s|capitalize }}</span></div>{% endfor %}
+</div>
+<div class="panel empty" style="margin-top:14px">
+  {% if running_scan %}
+  <h2>Scan #{{ running_scan.id }} is running</h2><p>Results appear here when it finishes.</p>
+  <a class="btn" href="{{ url_for('scan_center', scan=running_scan.id) }}">Follow progress</a>
+  {% else %}
+  <h2>No scans yet</h2><p>Start a scan to see findings from Semgrep, OWASP ZAP and Trivy.</p>
+  <a class="btn" href="{{ url_for('scan_center') }}">Open the Scan Center</a>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,26 @@
+rules:
+  - id: smartvuln-substring-url-allowlist
+    message: >-
+      URL allow-list check uses a substring test ($URL.includes / indexOf). An attacker URL that merely
+      contains an allowed value (e.g. https://evil.example/?https://trusted.example) passes the check.
+    severity: WARNING
+    languages: [typescript, javascript]
+    metadata:
+      cwe: ["CWE-601: URL Redirection to Untrusted Site ('Open Redirect')"]
+      owasp: ["A01:2021 - Broken Access Control"]
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      smartvuln_category: open-redirect
+      remediation: Parse the URL (new URL(x)) and compare origin/host exactly against the allow-list.
+    patterns:
+      - pattern-either:
+          - pattern: $URL.includes($ALLOWED)
+          - pattern: $URL.indexOf($ALLOWED) !== -1
+          - pattern: $URL.indexOf($ALLOWED) > -1
+          - pattern: $URL.indexOf($ALLOWED) >= 0
+      - metavariable-regex:
+          metavariable: $URL
+          regex: (?i)^.*(url|uri|redirect|target|origin|href|host).*$
+      - metavariable-regex:
+          metavariable: $ALLOWED
+          regex: (?i)^.*(allow|white|trusted|safe|permitted).*$

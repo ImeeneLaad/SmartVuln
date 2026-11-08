@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmartVuln comparison #{{ baseline.id }} → #{{ current.id }}</title>
+{% include "_report_style.html" %}
+</head>
+<body><main>
+<h1>Scan comparison #{{ baseline.id }} → #{{ current.id }}</h1>
+<div class="muted">Baseline {{ baseline.started_at }} ({{ baseline.source_ref or '-' }}) · current {{ current.started_at }} ({{ current.source_ref or '-' }}) · generated {{ generated }}</div>
+{% if baseline.is_demo or current.is_demo %}<div class="demo">DEMONSTRATION FIXTURES involved in this comparison.</div>{% endif %}
+<div class="grid" style="margin-top:16px">
+{% for k in ['new','resolved','not_observed','persistent','not_retested','severity_increased','severity_decreased'] %}
+  <div class="card kpi"><b>{{ summary[k] }}</b><span>{{ k.replace('_',' ') }}</span></div>
+{% endfor %}
+</div>
+<p class="muted">"Not re-tested" = absent now, but the scanner that found it did not complete in the current scan.
+"Not observed" = a ZAP finding whose URL was not reported again while the same rule still fires on other URLs (DAST URL sampling, not a fix).
+Neither is counted as resolved.{% if summary.new_known_rule %} {{ summary.new_known_rule }} new finding(s) are new locations of a ZAP rule already present in the baseline.{% endif %}</p>
+
+{% if cmp.coverage_changes %}<h2>Scanner coverage changes</h2>
+<table><tr><th>Scanner</th><th>Baseline</th><th>Current</th></tr>
+{% for c in cmp.coverage_changes %}<tr><td>{{ c.scanner }}</td><td>{{ c.baseline_status }} ({{ c.baseline_findings }})</td><td>{{ c.current_status }} ({{ c.current_findings }})</td></tr>{% endfor %}
+</table>{% endif %}
+
+{% if cmp.severity_changes %}<h2>Severity changes</h2>
+<table><tr><th>Issue</th><th>Location</th><th>Change</th></tr>
+{% for c in cmp.severity_changes %}<tr><td>{{ c.title }}</td><td><code>{{ c.location }}</code></td><td>{{ c.from }} → <b>{{ c.to }}</b></td></tr>{% endfor %}
+</table>{% endif %}
+
+{% for name, items in [('New findings', cmp.new), ('Resolved findings', cmp.resolved), ('Not observed this time (rule still fires elsewhere)', cmp.not_observed), ('Not re-tested', cmp.not_retested)] %}
+{% if items %}<h2>{{ name }} ({{ items|length }})</h2>
+<div class="table-wrap"><table><tr><th>Severity</th><th>Scanner</th><th>Title</th><th>Location</th></tr>
+{% for f in items|sort(attribute='risk_score', reverse=True) %}<tr><td><span class="sev sev-{{ f.severity }}">{{ f.severity }}</span></td><td>{{ f.scanner }}</td><td>{{ f.title }}{% if f.fingerprint in cmp.new_known_rule %} <span class="tag">new location of a known rule</span>{% endif %}</td><td><code>{{ f.location }}</code></td></tr>{% endfor %}
+</table></div>{% endif %}
+{% endfor %}
+<p class="muted">Persistent findings: {{ summary.persistent }} (matched by fingerprint = scanner + rule + location).</p>
+</main></body></html>

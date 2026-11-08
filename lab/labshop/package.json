@@ -1,0 +1,20 @@
+{
+  "name": "labshop",
+  "version": "1.0.0",
+  "description": "Deliberately vulnerable demo shop for the SmartVuln lab. Never deploy it outside an isolated lab.",
+  "private": true,
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "cookie-parser": "1.4.5",
+    "express": "4.17.1",
+    "jsonwebtoken": "8.5.1",
+    "lodash": "4.17.15"
+  }
+}

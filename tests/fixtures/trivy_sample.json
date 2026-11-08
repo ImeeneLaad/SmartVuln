@@ -1,0 +1,20 @@
+{"_comment": "HAND-WRITTEN TEST FIXTURE - not real scanner output",
+ "SchemaVersion": 2, "ArtifactName": "bkimminich/juice-shop:test", "ArtifactType": "container_image",
+ "Results": [
+  {"Target": "Node.js", "Class": "lang-pkgs", "Type": "node-pkg", "Vulnerabilities": [
+    {"VulnerabilityID": "CVE-2015-9235", "VendorIDs": ["GHSA-c7hr-j4mj-j2w6"], "PkgName": "jsonwebtoken", "InstalledVersion": "0.4.0",
+     "FixedVersion": "4.2.2", "Severity": "CRITICAL", "Title": "jsonwebtoken verification bypass", "CweIDs": ["CWE-20"],
+     "CVSS": {"nvd": {"V3Score": 9.8}}, "PkgPath": "juice-shop/node_modules/jsonwebtoken/package.json"},
+    {"VulnerabilityID": "CVE-2015-9235", "PkgName": "jsonwebtoken", "InstalledVersion": "0.1.0",
+     "FixedVersion": "4.2.2", "Severity": "CRITICAL", "CVSS": {"ghsa": {"V3Score": 9.8}},
+     "PkgPath": "juice-shop/node_modules/express-jwt/node_modules/jsonwebtoken/package.json"},
+    {"VulnerabilityID": "CVE-2020-0001", "PkgName": "lodash", "InstalledVersion": "4.17.0", "Severity": "HIGH",
+     "PkgPath": "juice-shop/node_modules/lodash/package.json"}]},
+  {"Target": "lib/insecurity.ts", "Class": "secret", "Secrets": [
+    {"RuleID": "private-key", "Category": "AsymmetricPrivateKey", "Severity": "HIGH", "Title": "Asymmetric Private Key",
+     "StartLine": 22, "EndLine": 22, "Match": "const privateKey = '-----BEGIN RSA PRIVATE KEY-----MIICXAIBAAKBgQDNwqLEe9wgTXCbC7'"}]},
+  {"Target": "Dockerfile", "Class": "config", "Misconfigurations": [
+    {"ID": "DS002", "AVDID": "AVD-DS-0002", "Title": "Image user should not be 'root'", "Severity": "HIGH", "Status": "FAIL",
+     "Message": "Specify at least 1 USER command", "CauseMetadata": {"StartLine": 1, "EndLine": 1}},
+    {"ID": "DS001", "Title": "passing check", "Severity": "MEDIUM", "Status": "PASS"}]}
+ ]}

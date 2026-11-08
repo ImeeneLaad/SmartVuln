@@ -1,0 +1,18 @@
+{"_comment": "HAND-WRITTEN TEST FIXTURE - not real scanner output",
+ "@programName": "ZAP", "@version": "2.16.0",
+ "site": [{"@name": "http://juice-shop:3000", "alerts": [
+   {"pluginid": "40018", "alertRef": "40018", "alert": "SQL Injection - SQLite", "riskcode": "3", "confidence": "2",
+    "desc": "<p>SQL injection may be possible.</p>", "solution": "<p>Use prepared statements.</p>", "cweid": "89",
+    "reference": "<p>https://owasp.org/sqli</p>",
+    "instances": [{"uri": "http://juice-shop:3000/rest/products/search?q=%27%28", "method": "GET", "param": "q",
+                   "attack": "'(", "evidence": "SQLITE_ERROR"}]},
+   {"pluginid": "40024", "alert": "SQL Injection - SQLite (Time Based)", "riskcode": "3", "confidence": "1",
+    "cweid": "89", "instances": [{"uri": "http://juice-shop:3000/rest/products/search?q=x", "method": "GET", "param": "q",
+                   "attack": "case randomblob(1000000000)"}]},
+   {"pluginid": "10038", "alert": "Content Security Policy (CSP) Header Not Set", "riskcode": "2", "confidence": "3",
+    "cweid": "693", "instances": [{"uri": "http://juice-shop:3000/", "method": "GET"},
+                                  {"uri": "http://juice-shop:3000/", "method": "GET"},
+                                  {"uri": "http://juice-shop:3000/ftp", "method": "GET"}]},
+   {"pluginid": "10096", "alert": "Timestamp Disclosure - Unix", "riskcode": "0", "confidence": "1", "cweid": "497",
+    "instances": [{"uri": "http://juice-shop:3000/main.js", "method": "GET", "evidence": "1650485437"}]}
+ ]}]}

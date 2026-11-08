@@ -1,0 +1,109 @@
+# SmartVuln configuration. Every value can be overridden with an environment
+# variable SMARTVULN_<SECTION>_<KEY> (e.g. SMARTVULN_TARGET_URL) - see smartvuln/config.py.
+
+[general]
+application   = "juice-shop"
+display_name  = "OWASP Juice Shop v20.3.0"
+data_dir      = "data"                     # SQLite DB + per-scan report folders
+database      = "data/smartvuln.db"
+
+[target]
+# URL used by the ZAP container (it joins the compose network, so the service name resolves).
+url             = "http://juice-shop:3000"
+# URL used by the orchestrator on the host for the readiness check.
+healthcheck_url = "http://localhost:3000/rest/admin/application-version"
+# Address to open the application in your own browser (url above only works inside Docker).
+browse_url      = "http://localhost:3000"
+healthcheck_timeout_s = 180
+# Safety: only these hosts may be scanned unless --allow-external is passed explicitly.
+allowed_hosts   = ["juice-shop", "labshop", "localhost", "127.0.0.1", "host.docker.internal"]
+docker_network  = "smartvuln-net"
+
+[source]
+path       = "targets/juice-shop"         # application source code for SAST
+entrypoint = "server.ts"                  # Express entry point for the route map
+image      = "bkimminich/juice-shop:v20.3.0"  # deployed artifact for dependency scanning
+
+[semgrep]
+enabled   = true
+image     = "semgrep/semgrep:latest"
+configs   = ["p/javascript", "p/typescript", "p/nodejs", "custom_rules/semgrep"]
+exclude   = ["node_modules", "frontend/node_modules", "dist", "build", "test", "cypress",
+             "data/static/codefixes", "*.spec.ts", "frontend/src/assets", "monitoring", "vagrant"]
+timeout_s = 1200
+
+[zap]
+enabled   = true
+image     = "ghcr.io/zaproxy/zaproxy:stable"
+profile   = "targeted"     # "baseline" = spider + passive rules; "targeted" = + limited active scan
+spider_minutes      = 2
+active_scan_minutes = 10
+# Endpoints that the spider cannot discover in an Angular SPA; requested before scanning.
+seed_paths = ["/rest/products/search?q=apple", "/api/Products", "/rest/track-order/5267-f9cd5882f54c75a3",
+              "/redirect?to=https://github.com/juice-shop/juice-shop", "/ftp", "/support/logs", "/rest/user/whoami"]
+# JSON POST endpoints seeded with a harmless body so the active scan can fuzz their parameters.
+seed_posts = [{ path = "/rest/user/login", body = '{"email":"smartvuln@example.test","password":"probe"}' }]
+timeout_s = 1800
+
+[trivy]
+enabled   = true
+image     = "aquasec/trivy:latest"
+scan_image  = true          # dependency CVEs of the deployed container image
+scan_source = true          # secrets + misconfiguration in the source tree
+severities  = "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
+cache_volume = "smartvuln-trivy-cache"
+skip_dirs   = ["node_modules", "frontend/node_modules", "data/static/codefixes"]  # codefixes = challenge snippet fixtures
+timeout_s = 1200
+
+[correlation]
+line_tolerance = 2
+
+# ---------------------------------------------------------------------------------------
+# Additional scan targets. The sections above describe the default target (Juice Shop);
+# each [targets.<id>] block overrides only what differs. Selectable in the Scan Center
+# and with `python -m smartvuln scan --target <id>`.
+[targets.labshop]
+display_name    = "LabShop (local lab app)"
+url             = "http://labshop:3000"
+healthcheck_url = "http://localhost:3100/health"
+browse_url      = "http://localhost:3100"
+source_path     = "lab/labshop"
+entrypoint      = "server.js"
+image           = "smartvuln-labshop:latest"
+# /health returns a hash of the code the container was built from; the Scan Center
+# warns when it differs from the source on disk (= rebuild needed before scanning).
+reports_source_hash = true
+semgrep_exclude = ["node_modules", "public/vendor"]
+trivy_skip_dirs = ["node_modules"]
+seed_paths = ["/search?q=lamp", "/api/products/search?q=lamp", "/download?file=catalog.txt",
+              "/go?url=https://example.org", "/api/tools/lookup?host=localhost", "/profile"]
+# Signs in with the seeded lab account so ZAP also sees the session cookie (lab-only credentials).
+seed_posts = [{ path = "/login", body = "email=alice@labshop.test&password=alice123", content_type = "application/x-www-form-urlencoded" }]
+
+# Risk scoring - see smartvuln/engine/scoring.py for the formula and defaults.
+[scoring.severity_points]
+critical = 90
+high     = 70
+medium   = 45
+low      = 20
+info     = 5
+
+[scoring.confidence_multiplier]
+high    = 1.0
+medium  = 0.85
+low     = 0.6
+unknown = 0.85
+
+[scoring.adjustments]
+dast_attack_succeeded      = 10
+rule_likelihood_high       = 5
+rule_likelihood_low        = -5
+corroborated_multi_scanner = 10
+reachable_http_handler     = 5
+observed_on_deployment     = 5
+non_production_code        = -15
+
+[scoring.priority_bands]
+P1 = 80
+P2 = 60
+P3 = 35

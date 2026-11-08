@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmartVuln report #{{ scan.id }}</title>
+{% include "_report_style.html" %}
+</head>
+<body><main>
+<h1>SmartVuln security assessment - {{ scan.application }}</h1>
+<div class="muted">Scan #{{ scan.id }} · started {{ scan.started_at }} · source <code>{{ scan.source_ref or '-' }}</code> · target <code>{{ scan.target_url }}</code> · generated {{ generated }}</div>
+{% if scan.is_demo %}<div class="demo">DEMONSTRATION FIXTURES - these findings were loaded from sample reports, not produced by a live scan.</div>{% endif %}
+
+<h2>Scanner execution</h2>
+<div class="table-wrap"><table>
+<tr><th>Scanner</th><th>Type</th><th>Status</th><th>Version</th><th>Duration</th><th>Findings</th><th>Notes</th></tr>
+{% for r in scan.runs %}
+<tr><td>{{ r.scanner }}</td><td>{{ r.scan_type }}</td><td class="status-{{ r.status }}">{{ r.status }}</td>
+<td>{{ r.tool_version or '-' }}</td><td>{{ '%.0f'|format(r.duration_s or 0) }}s</td><td>{{ r.findings_count }}</td>
+<td class="muted">{{ (r.error or '')[:200] }}</td></tr>
+{% endfor %}
+</table></div>
+
+<h2>Summary</h2>
+<div class="grid">
+  <div class="card kpi"><b>{{ findings|length }}</b><span>raw findings</span></div>
+  <div class="card kpi"><b>{{ primary|length }}</b><span>unique issues</span></div>
+  <div class="card kpi"><b>{{ multi|length }}</b><span>multi-scanner</span></div>
+  {% for s in severities %}<div class="card kpi"><b>{{ sev_counts.get(s, 0) }}</b><span>{{ s }}</span></div>{% endfor %}
+</div>
+<p class="muted">Severity counts are for unique issues (group primaries). By scan type: {% for t, n in type_counts.items() %}{{ t }} {{ n }}{{ ', ' if not loop.last }}{% endfor %}.
+Priorities: {% for p in ['P1','P2','P3','P4'] %}{{ p }} {{ prio_counts.get(p, 0) }}{{ ', ' if not loop.last }}{% endfor %}.</p>
+{% if comparison %}<p>Compared with the previous scan: {% for k, v in comparison.items() %}<span class="tag">{{ k.replace('_',' ') }}: {{ v }}</span> {% endfor %}</p>{% endif %}
+
+<h2>Prioritized unique issues</h2>
+<div class="table-wrap"><table>
+<tr><th>Score</th><th>Severity</th><th>Issue</th><th>Location</th><th>Correlation</th></tr>
+{% for f in primary %}
+<tr>
+<td><b>{{ '%.0f'|format(f.risk_score) }}</b> <span class="tag">{{ f.priority }}</span></td>
+<td><span class="sev sev-{{ f.severity }}">{{ f.severity }}</span></td>
+<td><b>{{ f.title }}</b><br><span class="muted">{{ f.scanner }} · {{ f.rule_id }} · {{ f.category }}{% if f.cwe %} · {{ f.cwe|join(', ') }}{% endif %}{% if f.cve %} · {{ f.cve[:2]|join(', ') }}{% endif %}</span>
+<details><summary class="muted">Why this score / remediation</summary>
+<ul>{% for x in f.risk_factors %}<li><code>{{ x.factor }} {{ x.value }}</code> - {{ x.reason }}</li>{% endfor %}</ul>
+<p>{{ f.remediation }}</p>{% if f.correlation_reasons %}<ul>{% for r in f.correlation_reasons %}<li class="muted">{{ r }}</li>{% endfor %}</ul>{% endif %}
+</details></td>
+<td><code>{{ f.location }}</code></td>
+<td>{{ f.correlation_status.replace('_',' ') }}{% if f.related_ids %} (+{{ f.related_ids|length }}){% endif %}<br><span class="muted">{{ f.triage_status.replace('_',' ') }}</span></td>
+</tr>
+{% endfor %}
+</table></div>
+<p class="muted">Every finding is "needs verification" until an analyst records a verdict. SmartVuln never automatically confirms a vulnerability or dismisses one as a false positive.</p>
+</main></body></html>

@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% from "_macros.html" import sev %}
+{% block title %}Compare{% endblock %}
+
+{% macro scan_option(s, selected) %}<option value="{{ s.id }}" {{ 'selected' if selected }}>#{{ s.id }} · {{ target_names.get(s.application, s.application) }}{{ ' · ' ~ s.label if s.label }} · {{ s.started_at[:16].replace('T', ' ') }}</option>{% endmacro %}
+
+{% macro finding_table(items, sid, mark_known=False) %}
+<div class="table-wrap"><table class="data">
+  <tbody>
+  {% for f in items|sort(attribute='risk_score', reverse=True) %}{% if loop.index <= 300 %}
+  <tr><td style="width:96px">{{ sev(f.severity) }}</td>
+    <td class="title-cell"><a href="{{ url_for('finding_detail', finding_id=f.id, scan=sid) }}">{{ f.title[:110] }}</a>
+      <div class="meta">{{ 'OWASP ZAP' if f.scanner == 'zap' else f.scanner|capitalize }} · {{ f.scan_type }}{% if mark_known and f.fingerprint in cmp.new_known_rule %} · new location of a rule already reported before{% endif %}</div></td>
+    <td class="loc">{{ f.location[:90] }}</td></tr>
+  {% endif %}{% endfor %}
+  </tbody>
+</table></div>
+{% endmacro %}
+
+{% block content %}
+<div class="page-head"><h1>Compare scans</h1></div>
+
+{% if finished|length < 2 %}
+<div class="panel empty"><h2>Two completed scans needed</h2><p>Run a scan, change the application, then scan again.</p>
+  <a class="btn" href="{{ url_for('scan_center') }}">Scan Center</a></div>
+{% else %}
+<form method="get" class="filters">
+  <select name="baseline" aria-label="Before">{% for s in finished %}{{ scan_option(s, baseline and s.id == baseline.id) }}{% endfor %}</select>
+  <span class="muted">→</span>
+  <select name="current" aria-label="After">{% for s in finished %}{{ scan_option(s, current and s.id == current.id) }}{% endfor %}</select>
+  <button type="submit">Compare</button>
+  {% if cmp %}<a class="small" href="{{ url_for('html_compare', baseline=baseline.id, current=current.id) }}" target="_blank">Export report</a>{% endif %}
+</form>
+{% endif %}
+{% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+
+{% if cmp %}
+{% if baseline.source_ref and baseline.source_ref == current.source_ref %}<div class="notice">Both scans analysed the same source version ({{ baseline.source_ref }}) — differences come from the scanners, not from code changes.</div>{% endif %}
+
+<div class="metrics">
+  <div class="metric"><b>{{ before_total }}</b><span>Before · #{{ baseline.id }}</span></div>
+  <div class="metric"><b>{{ after_total }}</b><span>After · #{{ current.id }}</span></div>
+  <div class="metric good"><b>{{ summary.resolved }}</b><span>Resolved</span></div>
+  <div class="metric"><b>{{ remaining|length }}</b><span>Remaining</span></div>
+  <div class="metric {{ 'bad' if summary.new }}"><b>{{ summary.new }}</b><span>New</span></div>
+  {% if summary.not_retested %}<div class="metric"><b>{{ summary.not_retested }}</b><span>Not re-tested</span></div>{% endif %}
+</div>
+<div class="small muted" style="margin-top:6px">
+  {% set delta = after_total - before_total %}
+  {% if before_total %}{{ '%+d'|format(delta) }} findings ({{ '%+.0f'|format(100 * delta / before_total) }}%).{% endif %}
+  {% if summary.moved %} {{ summary.moved }} code findings only moved to another line and count as remaining.{% endif %}
+  {% if summary.not_observed %} {{ summary.not_observed }} ZAP findings not seen again are counted as remaining because their rule still fires elsewhere.{% endif %}
+</div>
+
+<div class="grid cols-2" style="margin-top:18px">
+  <div class="panel pad"><h3>By severity</h3><div class="chart"><canvas id="cSev" aria-label="Findings by severity before and after"></canvas></div></div>
+  <div class="panel pad"><h3>By scanner</h3><div class="chart"><canvas id="cScan" aria-label="Findings by scanner before and after"></canvas></div></div>
+</div>
+
+<details class="fold" open style="margin-top:18px"><summary>Resolved <span class="count">{{ cmp.resolved|length }}</span></summary>
+  {% if cmp.resolved %}{{ finding_table(cmp.resolved, baseline.id) }}{% else %}<div class="body small muted">Nothing resolved.</div>{% endif %}
+</details>
+<details class="fold" {{ 'open' if cmp.new }}><summary>New <span class="count">{{ cmp.new|length }}</span></summary>
+  {% if cmp.new %}{{ finding_table(cmp.new, current.id, True) }}{% else %}<div class="body small muted">No new findings.</div>{% endif %}
+</details>
+<details class="fold"><summary>Remaining <span class="count">{{ remaining|length }}</span></summary>
+  {{ finding_table(cmp.persistent, current.id) }}
+  {% if cmp.not_observed %}<div class="body small muted" style="padding-top:10px">Not seen again, rule still active elsewhere:</div>{{ finding_table(cmp.not_observed, baseline.id) }}{% endif %}
+</details>
+{% if cmp.not_retested %}
+<details class="fold"><summary>Not re-tested <span class="count">{{ cmp.not_retested|length }}</span></summary>
+  <div class="body small muted">The scanner that reported these did not run or did not complete in scan #{{ current.id }}.</div>
+  {{ finding_table(cmp.not_retested, baseline.id) }}
+</details>
+{% endif %}
+{% if cmp.severity_changes %}
+<details class="fold"><summary>Severity changes <span class="count">{{ cmp.severity_changes|length }}</span></summary>
+  <div class="table-wrap"><table class="data"><tbody>{% for c in cmp.severity_changes %}<tr><td>{{ c.title }}</td><td class="loc">{{ c.location }}</td><td class="nowrap">{{ sev(c['from']) }} → {{ sev(c.to) }}</td></tr>{% endfor %}</tbody></table></div>
+</details>
+{% endif %}
+{% if cmp.coverage_changes %}
+<details class="fold"><summary>Scanner coverage <span class="count">{{ cmp.coverage_changes|length }}</span></summary>
+  <div class="table-wrap"><table class="data"><thead><tr><th>Scanner</th><th>Before</th><th>After</th></tr></thead><tbody>
+  {% for c in cmp.coverage_changes %}<tr><td>{{ 'OWASP ZAP' if c.scanner == 'zap' else c.scanner|capitalize }}</td><td>{{ c.baseline_status.replace('_', ' ') }} · {{ c.baseline_findings }}</td><td>{{ c.current_status.replace('_', ' ') }} · {{ c.current_findings }}</td></tr>{% endfor %}
+  </tbody></table></div>
+</details>
+{% endif %}
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if cmp %}
+<script>
+SV.chart(function () {
+  const v = {{ viz|tojson }};
+  const before = SV.color('info'), after = SV.color('accent');
+  const cap = s => s === 'zap' ? 'OWASP ZAP' : s[0].toUpperCase() + s.slice(1);
+  const opts = { maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } },
+                 scales: { y: { beginAtZero: true, ticks: { precision: 0 } }, x: { grid: { display: false } } } };
+  new Chart(cSev, { type: 'bar', data: { labels: SV.sev.map(cap),
+    datasets: [{ label: 'Before #{{ baseline.id }}', data: v.severity.before, backgroundColor: before },
+               { label: 'After #{{ current.id }}', data: v.severity.after, backgroundColor: after }] }, options: opts });
+  new Chart(cScan, { type: 'bar', data: { labels: v.scanner.labels.map(cap),
+    datasets: [{ label: 'Before #{{ baseline.id }}', data: v.scanner.before, backgroundColor: before },
+               { label: 'After #{{ current.id }}', data: v.scanner.after, backgroundColor: after }] }, options: opts });
+});
+</script>
+{% endif %}
+{% endblock %}

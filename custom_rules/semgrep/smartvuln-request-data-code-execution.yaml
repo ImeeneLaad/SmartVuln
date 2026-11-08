@@ -1,0 +1,38 @@
+rules:
+  - id: smartvuln-request-data-code-execution
+    message: >-
+      HTTP request data reaches a dynamic code execution sink (eval / Function / vm context).
+      Node's `vm` module is not a security sandbox; sandboxing helpers such as notevil have known escapes.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      cwe: ["CWE-94: Improper Control of Generation of Code ('Code Injection')"]
+      owasp: ["A03:2021 - Injection"]
+      confidence: MEDIUM
+      likelihood: HIGH
+      smartvuln_category: code-injection
+      remediation: Never evaluate request data. Parse it with a data-only parser (JSON.parse, a schema validator).
+      references: ["https://nodejs.org/api/vm.html#vm-executing-javascript"]
+    mode: taint
+    pattern-sources:
+      - pattern: $REQ.body
+      - pattern: $REQ.query
+      - pattern: $REQ.params
+      - pattern: $REQ.headers
+      - pattern: $REQ.cookies
+      # Express handlers in this code base destructure the request: ({ body }: Request) => ...
+      - patterns:
+          - pattern-inside: |
+              ({ body }: Request, ...) => { ... }
+          - pattern: body
+      - patterns:
+          - pattern-inside: |
+              ({ query }: Request, ...) => { ... }
+          - pattern: query
+    pattern-sinks:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+      - pattern: $VM.runInThisContext(...)
+      - pattern: $VM.runInNewContext(...)
+      - pattern: $VM.runInContext(...)
+      - pattern: $VM.createContext(...)

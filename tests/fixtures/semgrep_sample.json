@@ -1,0 +1,23 @@
+{"_comment": "HAND-WRITTEN TEST FIXTURE - not real scanner output",
+ "version": "1.0.0", "errors": [],
+ "results": [
+  {"check_id": "custom_rules.semgrep.smartvuln-sequelize-raw-query-interpolation", "path": "routes/search.ts",
+   "start": {"line": 23, "col": 5}, "end": {"line": 23, "col": 80},
+   "extra": {"message": "Raw Sequelize query built with template interpolation.", "severity": "ERROR",
+             "metadata": {"cwe": ["CWE-89: Improper Neutralization of Special Elements used in an SQL Command"], "confidence": "HIGH", "likelihood": "HIGH"},
+             "lines": "requires login"}},
+  {"check_id": "javascript.sequelize.security.audit.sequelize-injection-express", "path": "/src/routes/search.ts",
+   "start": {"line": 24, "col": 5}, "end": {"line": 24, "col": 50},
+   "extra": {"message": "Detected a sequelize statement that is tainted by user-input.", "severity": "ERROR",
+             "metadata": {"cwe": ["CWE-89"], "confidence": "MEDIUM"}}},
+  {"check_id": "javascript.lang.security.audit.md5-used-as-password", "path": "lib/insecurity.ts",
+   "start": {"line": 41, "col": 1}, "end": {"line": 41, "col": 90},
+   "extra": {"message": "MD5 used for passwords.", "severity": "WARNING", "metadata": {"cwe": "CWE-327"}}},
+  {"check_id": "custom_rules.semgrep.smartvuln-hardcoded-jwt-private-key", "path": "lib/insecurity.ts",
+   "start": {"line": 22, "col": 1}, "end": {"line": 22, "col": 40},
+   "extra": {"message": "Hard-coded private key.", "severity": "ERROR", "metadata": {"cwe": ["CWE-798"], "confidence": "HIGH"},
+             "lines": "const privateKey = 'MIICXAIBAAKBgQDNwqLEe9wgTXCbC7RPdDbBbeqjdbs4kOPOIGz'"}},
+  {"check_id": "test.rule", "path": "test/api/searchApiSpec.ts",
+   "start": {"line": 5, "col": 1}, "end": {"line": 5, "col": 2},
+   "extra": {"message": "SQL in test", "severity": "ERROR", "metadata": {"cwe": ["CWE-89"]}}}
+ ]}

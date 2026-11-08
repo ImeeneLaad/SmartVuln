@@ -1,0 +1,101 @@
+name: SmartVuln security assessment
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read          # least privilege: no secrets, no write access are needed
+
+concurrency:
+  group: smartvuln-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  JUICE_SHOP_TAG: v20.3.0
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  tests:
+    name: Unit tests + custom rule tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: Engine unit tests
+        run: python -m pytest -q tests
+      - name: Custom Semgrep rule tests (semgrep --test)
+        run: |
+          docker run --rm -v "$PWD/custom_rules/semgrep:/rules:ro" -w /rules semgrep/semgrep \
+            semgrep --test --metrics=off /rules
+
+  assessment:
+    name: SAST + SCA + DAST assessment
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: Fetch target source (pinned)
+        run: bash scripts/fetch_target.sh
+
+      - name: Deploy test application (isolated compose network)
+        run: docker compose up -d juice-shop
+
+      - name: Wait until the application is healthy
+        run: python -m smartvuln health --timeout 240
+
+      - name: Run scanners and analysis engine
+        id: scan
+        # Findings never fail this step; only an orchestration crash would.
+        continue-on-error: true
+        run: python -m smartvuln scan --label "ci ${GITHUB_SHA::8}"
+
+      - name: Evaluate against ground truth
+        if: always()
+        continue-on-error: true
+        run: python -m smartvuln evaluate --out data/evaluation.json
+
+      - name: Pipeline summary
+        if: always()
+        run: |
+          latest=$(find data/scans -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)
+          if [ -n "$latest" ] && [ -f "$latest/summary.md" ]; then
+            cat "$latest/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## SmartVuln: no scan output was produced" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f data/evaluation.md ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            cat data/evaluation.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Archive raw + normalized reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smartvuln-reports-${{ github.run_number }}
+          path: |
+            data/scans/
+            data/evaluation.*
+            data/smartvuln.db
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Target logs on failure
+        if: failure() || steps.scan.outcome == 'failure'
+        run: docker compose logs --tail 100 juice-shop
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

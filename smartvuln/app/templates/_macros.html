@@ -1,0 +1,33 @@
+{# Scan selector shown in the page header of scan-specific pages (Overview, Findings). #}
+{% macro scan_picker(scan, endpoint) %}
+{% if all_scans|length > 1 %}
+<form method="get" action="{{ url_for(endpoint) }}" class="scan-picker">
+  <label class="sr-only" for="scanPick">Scan</label>
+  <select id="scanPick" name="scan" onchange="this.form.submit()">
+    {% for s in all_scans %}<option value="{{ s.id }}" {{ 'selected' if s.id == scan.id }}>#{{ s.id }} · {{ target_names.get(s.application, s.application) }}{{ ' · ' ~ s.label if s.label }}</option>{% endfor %}
+  </select>
+</form>
+{% endif %}
+{% endmacro %}
+
+{% macro sev(s) %}<span class="sev {{ s }}">{{ s|capitalize }}</span>{% endmacro %}
+
+{% macro status(s, label=None) %}<span class="status {{ s }}">{{ label or s.replace('_', ' ')|capitalize }}</span>{% endmacro %}
+
+{% macro scanners_of(f, by_id) -%}
+  {%- set names = [f.scanner] -%}
+  {%- for i in f.related_ids %}{% if by_id.get(i) and by_id[i].scanner not in names %}{% set _ = names.append(by_id[i].scanner) %}{% endif %}{% endfor -%}
+  {{ names|sort|join(', ') }}
+{%- endmacro %}
+
+{# One row of the findings table. by_id lets the row list every scanner of the finding's group. #}
+{% macro finding_row(f, scan, by_id) %}
+<tr>
+  <td>{{ sev(f.severity) }}</td>
+  <td class="title-cell"><a href="{{ url_for('finding_detail', finding_id=f.id, scan=scan.id) }}">{{ f.title[:120] }}</a>
+    <div class="meta">{{ f.category.replace('-', ' ') }}{% if f.cwe %} · {{ f.cwe[0] }}{% endif %}{% if f.cve %} · {{ f.cve[0] }}{% endif %}</div></td>
+  <td class="loc">{{ f.location[:90] }}</td>
+  <td class="nowrap">{{ scanners_of(f, by_id) }}{% if f.correlation_status == 'multi_scanner' %} <span class="chip accent" title="Confirmed by more than one scanner">×{{ f.related_ids|length + 1 }}</span>{% endif %}</td>
+  <td class="num"><span class="score">{{ '%.0f'|format(f.risk_score) }}</span></td>
+</tr>
+{% endmacro %}

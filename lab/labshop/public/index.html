@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LabShop</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <a href="/">LabShop</a>
+    <nav><a href="/profile">My account</a> <a href="/download?file=catalog.txt">Catalog</a> <a href="/go?url=https://example.org">Partners</a></nav>
+  </header>
+  <main>
+    <section>
+      <h1>Office essentials</h1>
+      <form action="/search" method="get" class="inline">
+        <input name="q" placeholder="Search products" aria-label="Search products">
+        <button>Search</button>
+      </form>
+      <ul id="products" class="results"></ul>
+    </section>
+
+    <section class="side">
+      <h2>Sign in</h2>
+      <form action="/login" method="post">
+        <label>Email <input name="email" type="email" value="alice@labshop.test"></label>
+        <label>Password <input name="password" type="password"></label>
+        <button>Sign in</button>
+      </form>
+
+      <h2>Supplier lookup</h2>
+      <form action="/api/tools/lookup" method="get" class="inline">
+        <input name="host" value="localhost" aria-label="Host name">
+        <button>Resolve</button>
+      </form>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

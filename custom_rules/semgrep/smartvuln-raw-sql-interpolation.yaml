@@ -1,0 +1,28 @@
+rules:
+  - id: smartvuln-raw-sql-interpolation
+    message: >-
+      SQL text built by string interpolation/concatenation ($X is embedded in the query passed to $DB.$METHOD).
+      Use bound parameters instead (e.g. db.prepare('... WHERE a = ?').all(a) or Sequelize replacements).
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      cwe: ["CWE-89: Improper Neutralization of Special Elements used in an SQL Command"]
+      owasp: ["A03:2021 - Injection"]
+      confidence: HIGH
+      likelihood: HIGH
+      smartvuln_category: sql-injection
+      remediation: Pass user data as bound parameters (?, :name, replacements, bind) instead of building SQL strings.
+      references:
+        - "https://sequelize.org/docs/v6/core-concepts/raw-queries/#replacements"
+        - "https://nodejs.org/api/sqlite.html#statementallnamedparameters-anonymousparameters"
+    patterns:
+      - pattern-either:
+          - pattern: $DB.$METHOD(`...${$X}...`, ...)
+          - pattern: $DB.$METHOD("..." + $X, ...)
+          - pattern: $DB.$METHOD("..." + $X + "...", ...)
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^(query|prepare|exec|all|get|run|raw|execute)$
+      - metavariable-regex:
+          metavariable: $DB
+          regex: (?i)^.*(sequelize|db|database|sql|knex|conn|pool)$

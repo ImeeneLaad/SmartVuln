@@ -1,0 +1,23 @@
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --ink:#161a1f; --muted:#6a737d; --line:#e1e4e8;
+          --critical:#8f1d2c; --high:#cc4b2c; --medium:#d1912a; --low:#3c78b5; --info:#8b949e; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14171b; --card:#1d2126; --ink:#e6e9ec; --muted:#9aa3ad; --line:#2d333a; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width:1100px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:19px; font-weight:600; margin:0 0 4px; } h2 { font-size:14px; margin:28px 0 10px; }
+  .muted { color:var(--muted); } .card { background:var(--card); border:1px solid var(--line); border-radius:4px; padding:16px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:10px; }
+  .kpi b { display:block; font-size:24px; } .kpi span { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); border-radius:4px; overflow:hidden; }
+  th, td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
+  code { font:12px ui-monospace,Consolas,monospace; word-break:break-all; }
+  .sev { display:inline-block; padding:1px 8px; border-radius:99px; color:#fff; font-size:12px; font-weight:600; }
+  .sev-critical{background:var(--critical)} .sev-high{background:var(--high)} .sev-medium{background:var(--medium)}
+  .sev-low{background:var(--low)} .sev-info{background:var(--info)}
+  .tag { display:inline-block; padding:0 7px; border:1px solid var(--line); border-radius:6px; font-size:12px; color:var(--muted); }
+  .demo { background:#fff3cd; color:#664d03; border:1px solid #e6c65c; padding:10px 14px; border-radius:4px; margin:12px 0; font-weight:600; }
+  .status-success{color:#1e8e3e} .status-completed_with_errors{color:#b06000} .status-failed,.status-timeout{color:#c4372b} .status-skipped{color:var(--muted)}
+  details summary { cursor:pointer; } .table-wrap { overflow-x:auto; }
+</style>

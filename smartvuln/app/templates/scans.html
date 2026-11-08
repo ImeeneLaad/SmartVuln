@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status %}
+{% block title %}History{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Scan history</h1>
+  <a class="btn" href="{{ url_for('scan_center') }}">New scan</a>
+</div>
+{% if request.args.get('deleted') %}<div class="flash ok">Scan #{{ request.args.get('deleted') }} was deleted.</div>{% endif %}
+{% if not scans %}
+<div class="panel empty"><h2>No scans yet</h2><p>Every scan you start appears here.</p><a class="btn" href="{{ url_for('scan_center') }}">Scan Center</a></div>
+{% else %}
+<div class="table-wrap"><table class="data">
+<thead><tr><th>Scan</th><th>Target</th><th>Started (UTC)</th><th class="num">Duration</th><th>Scanners</th><th class="num">Findings</th><th class="num">Unique</th><th></th></tr></thead>
+<tbody>
+{% for s in scans %}{% set done = s.status in ('completed', 'partial') %}
+<tr>
+  <td class="title-cell">{% if done %}<a href="{{ url_for('overview', scan=s.id) }}">#{{ s.id }}</a>{% else %}#{{ s.id }}{% endif %}
+    {% if s.label %}<div class="meta">{{ s.label }}</div>{% endif %}</td>
+  <td>{{ target_names.get(s.application, s.application) }}<div class="small muted mono">{{ s.source_ref }}</div></td>
+  <td class="nowrap">{{ s.started_at.replace('T', ' ')[:16] }}</td>
+  <td class="num">{{ duration(s)|dur }}</td>
+  <td class="small">{% if not done %}{{ status(s.status) }}{% if s.status == 'running' %} <span class="muted">{{ s.phase }}</span>{% endif %}<br>{% endif %}
+    {% for r in s.runs %}<span class="status {{ r.status }}" title="{{ status_labels.get(r.status, r.status) }}{{ ' · ' ~ r.error if r.error }}">{{ 'ZAP' if r.scanner == 'zap' else r.scanner|capitalize }}</span>{{ '  ' if not loop.last }}{% endfor %}</td>
+  <td class="num">{{ s.stats.get('total', 0) if done else '—' }}</td>
+  <td class="num">{{ s.stats.get('unique_issues', 0) if done else '—' }}</td>
+  <td class="small nowrap row-actions">
+    {% if s.status == 'running' %}<a href="{{ url_for('scan_center', scan=s.id) }}">Live</a>
+    {% elif prev_finished.get(s.id) %}<a href="{{ url_for('compare', current=s.id, baseline=prev_finished[s.id]) }}">Compare</a>{% endif %}
+    <a href="{{ url_for('logs_page', scan=s.id) }}">Logs</a>
+    {% if s.status != 'running' %}
+    <button type="button" class="btn small danger-outline js-delete" data-id="{{ s.id }}"
+            aria-label="Delete scan #{{ s.id }}"
+            data-name="{{ s.label or 'Unnamed scan' }}" data-target="{{ target_names.get(s.application, s.application) }}"
+            data-date="{{ s.started_at.replace('T', ' ')[:16] }} UTC" data-findings="{{ s.stats.get('total', 0) if done else 0 }}">Delete scan</button>
+    {% endif %}
+  </td>
+</tr>
+{% endfor %}
+</tbody>
+</table></div>
+{% endif %}
+
+<dialog id="deleteDialog" class="modal" aria-labelledby="delTitle">
+  <form method="dialog" id="deleteForm">
+    <h2 id="delTitle">Delete scan #<span data-f="id"></span>?</h2>
+    <dl class="kv small">
+      <dt>Name</dt><dd data-f="name"></dd>
+      <dt>Target</dt><dd data-f="target"></dd>
+      <dt>Started</dt><dd data-f="date"></dd>
+      <dt>Findings</dt><dd data-f="findings"></dd>
+    </dl>
+    <p class="small muted" style="margin-top:12px">Its findings, logs and report files are removed permanently. Other scans and analyst verdicts are kept.</p>
+    <label class="field">Type <b data-f="id"></b> to confirm<input id="delConfirm" inputmode="numeric" autocomplete="off"></label>
+    <p class="small bad" id="delError" hidden></p>
+    <div class="modal-actions">
+      <button type="button" class="btn ghost" id="delCancel">Cancel</button>
+      <button type="button" class="btn danger" id="delOk" disabled>Delete scan</button>
+    </div>
+  </form>
+</dialog>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const dlg = document.getElementById('deleteDialog');
+  const input = document.getElementById('delConfirm'), ok = document.getElementById('delOk'), err = document.getElementById('delError');
+  const csrf = document.querySelector('meta[name=csrf-token]').content;
+  let current = null;
+
+  document.querySelectorAll('.js-delete').forEach(btn => btn.addEventListener('click', () => {
+    current = btn.dataset;
+    dlg.querySelectorAll('[data-f]').forEach(el => { el.textContent = current[el.dataset.f]; });
+    input.value = ''; ok.disabled = true; err.hidden = true;
+    dlg.showModal();
+    input.focus();
+  }));
+  input.addEventListener('input', () => { ok.disabled = input.value.trim().replace(/^#/, '') !== current.id; });
+  document.getElementById('delCancel').addEventListener('click', () => dlg.close());
+  document.getElementById('deleteForm').addEventListener('submit', e => { e.preventDefault(); if (!ok.disabled) ok.click(); });
+
+  ok.addEventListener('click', async () => {
+    ok.disabled = true; ok.textContent = 'Deleting…';
+    const r = await fetch('/api/scans/' + current.id, { method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+      body: JSON.stringify({ confirm: input.value.trim() }) });
+    const data = await r.json().catch(() => ({}));
+    if (r.ok) { location.href = '/scans?deleted=' + current.id; return; }
+    err.textContent = data.error || ('HTTP ' + r.status); err.hidden = false;
+    ok.textContent = 'Delete scan'; ok.disabled = false;
+  });
+})();
+</script>
+{% endblock %}

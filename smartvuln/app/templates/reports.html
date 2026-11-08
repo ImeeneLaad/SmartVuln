@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Reports{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Reports</h1></div>
+{% if not items %}
+<div class="panel empty"><h2>No reports yet</h2><p>Reports are written when a scan finishes.</p><a class="btn" href="{{ url_for('scan_center') }}">Scan Center</a></div>
+{% else %}
+<div class="table-wrap"><table class="data">
+<thead><tr><th>Scan</th><th>Assessment</th><th>Findings</th><th>Comparison</th><th>Scanner output</th></tr></thead>
+<tbody>
+{% for it in items %}{% set s = it.scan %}{% set names = it.files|map(attribute=0)|list %}
+<tr>
+  <td class="title-cell"><a href="{{ url_for('overview', scan=s.id) }}">#{{ s.id }}</a>
+    <div class="meta">{{ target_names.get(s.application, s.application) }}{{ ' · ' ~ s.label if s.label }} · {{ s.started_at[:16].replace('T', ' ') }}</div></td>
+  <td>{% if 'report.html' in names %}<a href="{{ url_for('report_file', scan_id=s.id, name='report.html') }}" target="_blank">HTML</a>{% endif %}
+      {% if 'summary.md' in names %} · <a href="{{ url_for('report_file', scan_id=s.id, name='summary.md') }}" target="_blank">Summary</a>{% endif %}</td>
+  <td>{% if 'normalized-findings.json' in names %}<a href="{{ url_for('report_file', scan_id=s.id, name='normalized-findings.json') }}" target="_blank">Normalized JSON</a>{% endif %}
+      <span class="small muted"> · {{ s.stats.get('total', 0) }}</span></td>
+  <td>{% if 'comparison-report.html' in names %}<a href="{{ url_for('report_file', scan_id=s.id, name='comparison-report.html') }}" target="_blank">HTML</a> · <a href="{{ url_for('report_file', scan_id=s.id, name='comparison.json') }}" target="_blank">JSON</a>{% else %}<span class="muted">—</span>{% endif %}</td>
+  <td class="small">{% for name, scanner in it.raws %}<a href="{{ url_for('raw_report', scan_id=s.id, name=name) }}" target="_blank">{{ name }}</a>{{ ', ' if not loop.last }}{% endfor %}</td>
+</tr>
+{% endfor %}
+</tbody>
+</table></div>
+<p class="small muted" style="margin-top:8px">Comparison reports are generated against the previous completed scan of the same target. Any other pair can be exported from <a href="{{ url_for('compare') }}">Compare</a>.</p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,64 @@
+# SmartVuln isolated test environment.
+#   docker compose up -d juice-shop     -> intentionally vulnerable target (localhost only)
+#   docker compose up -d labshop        -> LabShop lab app for the before/after scenario (127.0.0.1:3100)
+#   docker compose up -d dashboard      -> SmartVuln dashboard on http://localhost:5000
+# Scanners are started on demand by `python -m smartvuln scan` as short-lived containers
+# attached to the same private network (smartvuln-net).
+name: smartvuln
+
+services:
+  juice-shop:
+    image: ${JUICE_SHOP_IMAGE:-bkimminich/juice-shop:v20.3.0}
+    container_name: smartvuln-juice-shop
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"        # bound to loopback only: never exposed on the LAN
+    environment:
+      NODE_ENV: unsafe               # enables all challenges (intended for isolated testing)
+    healthcheck:
+      # distroless image: no shell/curl, so node itself performs the probe
+      test: ["CMD", "/nodejs/bin/node", "-e",
+             "require('http').get('http://localhost:3000/rest/admin/application-version',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    networks: [smartvuln-net]
+
+  labshop:
+    # Deliberately vulnerable lab app (lab/labshop). Rebuild after editing its code:
+    #   docker compose up -d --build labshop
+    build: ./lab/labshop
+    image: smartvuln-labshop:latest
+    container_name: smartvuln-labshop
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3100:3000"        # loopback only
+    healthcheck:
+      test: ["CMD", "node", "-e",
+             "fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+    networks: [smartvuln-net]
+
+  dashboard:
+    build: .
+    image: smartvuln:latest
+    container_name: smartvuln-dashboard
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5000:5000"
+    environment:
+      SMARTVULN_GENERAL_DATABASE: /app/data/smartvuln.db
+      SMARTVULN_GENERAL_DATA_DIR: /app/data
+    volumes:
+      - ./data:/app/data
+      - ./targets:/app/targets:ro    # lets the dashboard show source context; optional
+    networks: [smartvuln-net]
+    profiles: ["dashboard"]
+
+networks:
+  smartvuln-net:
+    name: smartvuln-net               # fixed name: the ZAP container joins it by name

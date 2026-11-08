@@ -1,0 +1,25 @@
+rules:
+  - id: smartvuln-hardcoded-crypto-key
+    message: >-
+      Cryptographic key material is hard-coded in source (private key, HMAC/JWT secret or cookie signing secret).
+      Anyone with read access to the repository can forge tokens or signatures.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      cwe: ["CWE-798: Use of Hard-coded Credentials", "CWE-321: Use of Hard-coded Cryptographic Key"]
+      owasp: ["A02:2021 - Cryptographic Failures"]
+      confidence: HIGH
+      likelihood: MEDIUM
+      smartvuln_category: hardcoded-secret
+      remediation: Load keys from a secret store or environment variable at runtime and rotate the exposed key.
+    pattern-either:
+      - patterns:
+          - pattern: $VAR = "$KEY"
+          - metavariable-regex:
+              metavariable: $KEY
+              regex: (?s).*-----BEGIN [A-Z ]*PRIVATE KEY-----.*
+      - pattern: $CRYPTO.createHmac($ALG, "...")
+      - pattern: jwt.sign($PAYLOAD, "...", ...)
+      - pattern: cookieParser("...", ...)
+      - pattern: |
+          expressJwt({..., secret: "...", ...})

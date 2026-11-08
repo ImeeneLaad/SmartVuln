@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% from "_macros.html" import finding_row, scan_picker with context %}
+{% block title %}Findings{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Findings</h1>
+    <div class="sub">{{ target_names.get(scan.application, scan.application) }} · scan #{{ scan.id }}{% if scan.label %} · {{ scan.label }}{% endif %} · {{ findings|length }} of {{ total }} shown</div>
+  </div>
+  <div class="head-actions">{{ scan_picker(scan, 'findings_view') }}</div>
+</div>
+
+<form method="get">
+  <input type="hidden" name="scan" value="{{ scan.id }}">
+  <div class="filters">
+    <input type="search" name="q" value="{{ flt.q }}" placeholder="Search title, rule, file, URL, package" aria-label="Search">
+    <select name="severity" aria-label="Severity"><option value="">All severities</option>{% for s in severities %}<option value="{{ s }}" {{ 'selected' if flt.severity == s }}>{{ s|capitalize }}</option>{% endfor %}</select>
+    <select name="scanner" aria-label="Scanner"><option value="">All scanners</option>{% for o in options.scanner %}<option value="{{ o }}" {{ 'selected' if flt.scanner == o }}>{{ 'OWASP ZAP' if o == 'zap' else o|capitalize }}</option>{% endfor %}</select>
+    <select name="scan_type" aria-label="Type"><option value="">SAST, DAST, SCA</option>{% for o in options.scan_type %}<option {{ 'selected' if flt.scan_type == o }}>{{ o }}</option>{% endfor %}</select>
+    <label class="small"><input type="checkbox" name="primary" value="1" {{ 'checked' if primary_only }}> Unique issues only</label>
+    <button type="submit">Apply</button>
+    {% if request.args|length > 1 %}<a class="small" href="{{ url_for('findings_view', scan=scan.id) }}">Clear</a>{% endif %}
+  </div>
+  <details class="fold" style="margin:-4px 0 12px" {{ 'open' if flt.category or flt.ident or flt.correlation or flt.triage or flt.priority }}>
+    <summary>More filters</summary>
+    <div class="body filters" style="margin:0">
+      <select name="category" aria-label="Class"><option value="">Any class</option>{% for o in options.category %}<option value="{{ o }}" {{ 'selected' if flt.category == o }}>{{ o.replace('-', ' ') }}</option>{% endfor %}</select>
+      <input name="ident" value="{{ flt.ident }}" placeholder="CWE-89, CVE-2024-…" aria-label="CWE or CVE" size="16">
+      <select name="correlation" aria-label="Correlation"><option value="">Any correlation</option>{% for o in options.correlation %}<option value="{{ o }}" {{ 'selected' if flt.correlation == o }}>{{ o.replace('_', ' ') }}</option>{% endfor %}</select>
+      <select name="triage" aria-label="Triage"><option value="">Any triage state</option>{% for o in options.triage %}<option value="{{ o }}" {{ 'selected' if flt.triage == o }}>{{ o.replace('_', ' ') }}</option>{% endfor %}</select>
+      <select name="priority" aria-label="Priority"><option value="">Any priority</option>{% for p in ['P1','P2','P3','P4'] %}<option {{ 'selected' if flt.priority == p }}>{{ p }}</option>{% endfor %}</select>
+      <select name="sort" aria-label="Sort"><option value="risk">Sort by risk</option>{% for s in ['severity','scanner','location'] %}<option value="{{ s }}" {{ 'selected' if sort == s }}>Sort by {{ s }}</option>{% endfor %}</select>
+    </div>
+  </details>
+</form>
+
+<div class="table-wrap"><table class="data">
+  <thead><tr><th>Severity</th><th>Issue</th><th>Location</th><th>Detected by</th><th class="num">Risk</th></tr></thead>
+  <tbody>
+  {% for f in findings %}{{ finding_row(f, scan, by_id) }}{% else %}<tr><td colspan="5" class="muted" style="padding:24px 12px">No findings match these filters.</td></tr>{% endfor %}
+  </tbody>
+</table></div>
+{% endblock %}
