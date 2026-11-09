@@ -98,6 +98,8 @@ class ZapAdapter(ScannerAdapter):
 
     def precheck(self) -> str | None:
         t = self.app_cfg["target"]
+        if not t.get("url"):
+            return "no running URL for this target - add the app's URL to run ZAP"
         try:
             check_target_allowed(t["url"], t.get("allowed_hosts", []), self.allow_external)
         except TargetNotAllowed as exc:

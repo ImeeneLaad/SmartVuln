@@ -7,9 +7,10 @@ export function listProducts (req, res) {
 }
 
 export function searchProducts (req, res, next) {
-  const q = req.query.q || ''
+  const q = String(req.query.q || '')
   try {
-    const rows = db.prepare(`SELECT id, name, description, price FROM products WHERE name LIKE '%${q}%' ORDER BY name`).all()
+    // The search text is passed as a bound parameter (?) - the database treats it as data, never as SQL.
+    const rows = db.prepare('SELECT id, name, description, price FROM products WHERE name LIKE ? ORDER BY name').all(`%${q}%`)
     res.json(rows)
   } catch (err) {
     next(err)

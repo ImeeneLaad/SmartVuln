@@ -224,6 +224,23 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; word-break: break-word; 
 .scanner-row input { width: 16px; height: 16px; margin-top: 2px; accent-color: var(--accent); }
 .scanner-row .what { color: var(--muted); font-size: 12.5px; }
 .ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--warn); }
+/* Scan Center: what to scan (tabs, drop zone, selected target) */
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin: 6px 0 14px; }
+.tab { background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: var(--muted); padding: 7px 12px; margin-bottom: -1px; font-weight: 500; }
+.tab:hover { background: none; color: var(--ink); }
+.tab.active { color: var(--ink); border-bottom-color: var(--accent); }
+.tab .count { color: var(--muted); font-weight: 400; font-size: 12px; }
+.dropzone { display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; cursor: pointer;
+  border: 1.5px dashed var(--line); border-radius: 8px; padding: 26px 16px; background: var(--surface-2); transition: border-color .15s, background .15s; }
+.dropzone:hover, .dropzone.drag { border-color: var(--accent); background: var(--accent-soft); }
+.dropzone.has-file { border-style: solid; border-color: var(--ok); }
+.dropzone .dz-main { font-size: 14px; } .dropzone u { color: var(--accent); }
+.dropzone:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+details.opt { margin-top: 4px; } details.opt > summary { cursor: pointer; font-size: 13px; color: var(--ink-2); margin-bottom: 8px; }
+details.opt[open] { padding-bottom: 4px; }
+.selected { margin-top: 16px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); }
+.selected .sel-name { font-weight: 600; margin: 2px 0 8px; }
+.scanner-row input:disabled + span { opacity: .55; }
 .checks { list-style: none; padding: 0; margin: 0; font-size: 13px; }
 .checks li { padding: 4px 0; display: flex; gap: 8px; }
 .checks li .mark { width: 14px; flex: none; }

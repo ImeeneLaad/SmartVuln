@@ -1,6 +1,19 @@
-// Signing keys for session tokens.
-// LAB ONLY: this key pair was generated for the LabShop demo and protects nothing real.
+import { generateKeyPairSync } from 'node:crypto'
 
-export const PRIVATE_KEY = '-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEAxkszW5CWsIV/BGKJ/rUYiN/mLY401eXf4BrEWrA1cLXSKWi5\nJRCp9PnE9j2428mNUmAYF31hd97dmndpvJL/aI4etycuA4+33EM35jYn9PFsqc+5\n7GcIK0O9McIx8vsFAhPlaN0QYxoLasFOzMwuNOtP99luJdIYUMZamAScq2Edyglz\nezVQlduXi4yB27/JKpszTSIPMWYJlokgxIdRQhhUQAzJ4C+yAQ9E86hnosFmoLDR\nsiZXO6vSKX0v1wpTUNeybJfAyzAMMSPQGYUz3tYk8vJdAB7QbMGqbQEeTzMrM1dX\nkibgWhsf73FaeQsGIHrVXIqtu8g6ivj4mN8UBwIDAQABAoIBABKG+Dd38lHFR1w2\nMMU2+nc0zvbhW0JuW1U/FarmMo1jZPgwLAxbMDtkEukcVJIElPW7ZhoxFtLyZIDd\njhLr0SgIZLT22NpwVTIj/axpfEuV5cc//L5/1J2Q6LPQ0dtCukcQFivkFnc2pGvH\nFVZr8Bf1sd/AgFrRnyqnkyiyVZ5q0YEycgI5JPXWTaoeGhA1xhtsJjJQo4/VEko5\ndB4k/QrAEQ/WeMlgzRIQVX6U7ZyqYzB0hhkbzAJujIo9/Yqn7ScQd5+rsvZMm1bg\nCosQpyIiib91PMZlBOr7Vh03JLErTv14IVa+78ECIlanTA8KrftsdaF7KVIl42G+\nVQcjtzECgYEA+9Vbizo1dMU4r9caPyKTyGe0fzu664g68/mI/BvTbaoK9Tb+fAl0\nI2H8DbmKZ4QoDFUnznYowqAYRpxmdNbXM9yQ9Q+OU6uztI23SuXkGRQueIWXqpBe\nWdx2LM+IDzHL8Zzq9noG+WOIhXuZ8n44lGWS686NIdFRjD+a4yNgLNUCgYEAyZMT\nSAU4+UMUazaIU8uoUxl8wHOPMiJiCr61PPOvxStOkhJ309LR61BVw3dVUT4fK4Tv\nRywxGJkERc+1GwTgYVtY4hejHH2gOmUZ59IVrtcSUJ5W0Cm4IWNiGrtTk2FMWaKc\ns90qMZr90xUX7UZvPAuTVXnHP0UpqeDTnRqae2sCgYEAxXnOOkQf7PxGcmTLmRyF\nJE5mFKuC7PU7vVs81uz/A2ynARjpv9wt7R0F6MFIzdmtCdawy06OseeWgbBdC1v5\nDxrztKdJJUVsOrYyOBJDpoLT2gBwKPjic7bUGFl4yOl0kndJLJQN6fvp7zo4QxZF\nSeDIsA6dTxpzxvWNgHWaEi0CgYEAnhrqKLdP9NMUlPN1AqTfJi77lsgNLTmixOLI\nrUJGP9S0EAbETjUxyex9GI/lL5AWSsA+HgkfiTecDlXYq5SrmjFYCh6YJaSzpJng\nM+CoeTbgerN3TFcswaN+M5FzAEp05GmTl9CFY9s58/K7jbSNUv+RVJ3sFkhdYY2i\n7bsMKHkCgYA0jVGu0XhthUJBD8AGNJSfdIp0W8Jpb/i6w7JXoHgazsE/YA47Rtay\niO31zYfKmLcfo0dAKuKAEs+Nt0KhD26slgsWteLlwwkwZcU94IsrhttNziGBSo3e\njiQDYEN0HV+CMirJzWUU08/z2Ih3bA1Au/xrp6+tuv8bjF6UIQpaCQ==\n-----END RSA PRIVATE KEY-----\n'
+// Signing keys for session tokens: taken from the environment (secret store), or generated at
+// start-up when none is configured (sessions then end when the server restarts).
+// No key material is ever stored in the source code.
+function loadKeys () {
+  if (process.env.JWT_PRIVATE_KEY && process.env.JWT_PUBLIC_KEY) {
+    return { privateKey: process.env.JWT_PRIVATE_KEY, publicKey: process.env.JWT_PUBLIC_KEY }
+  }
+  return generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' }
+  })
+}
 
-export const PUBLIC_KEY = '-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxkszW5CWsIV/BGKJ/rUY\niN/mLY401eXf4BrEWrA1cLXSKWi5JRCp9PnE9j2428mNUmAYF31hd97dmndpvJL/\naI4etycuA4+33EM35jYn9PFsqc+57GcIK0O9McIx8vsFAhPlaN0QYxoLasFOzMwu\nNOtP99luJdIYUMZamAScq2EdyglzezVQlduXi4yB27/JKpszTSIPMWYJlokgxIdR\nQhhUQAzJ4C+yAQ9E86hnosFmoLDRsiZXO6vSKX0v1wpTUNeybJfAyzAMMSPQGYUz\n3tYk8vJdAB7QbMGqbQEeTzMrM1dXkibgWhsf73FaeQsGIHrVXIqtu8g6ivj4mN8U\nBwIDAQAB\n-----END PUBLIC KEY-----\n'
+const keys = loadKeys()
+export const PRIVATE_KEY = keys.privateKey
+export const PUBLIC_KEY = keys.publicKey

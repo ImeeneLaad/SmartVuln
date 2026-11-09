@@ -20,6 +20,7 @@ from ..engine.triage import TriageDecision
 from ..models import SEVERITIES, SEVERITY_RANK, Finding
 from ..reports.render import render_comparison_html, render_html_report
 from ..orchestrator import delete_scan
+from ..projects import ProjectError, list_projects
 from ..scan_manager import SCANNER_INFO, STATUS_LABELS, ScanManager
 
 FILTER_FIELDS = ("q", "severity", "scanner", "scan_type", "category", "correlation", "triage", "priority", "ident")
@@ -50,6 +51,7 @@ def create_app(cfg: dict[str, Any] | None = None) -> Flask:
     cfg = cfg or load_config()
     app = Flask(__name__)
     app.config["SECRET_KEY"] = os.environ.get("SMARTVULN_SECRET_KEY") or secrets.token_hex(32)
+    app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # project uploads (zip) up to 200 MB
     store = Store(resolve(cfg["general"]["database"]))
     interrupted = store.mark_interrupted()  # threads of a previous server process are gone
     if interrupted:
@@ -357,6 +359,37 @@ def create_app(cfg: dict[str, Any] | None = None) -> Flask:
     def api_scan(scan_id: int):
         scan = store.get_scan(scan_id) or abort(404)
         return jsonify(scan_json(scan))
+
+    @app.get("/api/projects")
+    def api_projects():
+        return jsonify(list_projects(cfg))
+
+    @app.post("/api/projects")
+    def api_add_project():
+        """Add a project to scan: an uploaded zip / single file, or a folder on this PC.
+        Adding again with the same name replaces that project's code (for before/after scans)."""
+        token = request.headers.get("X-CSRF-Token") or request.form.get("csrf")
+        if not token or token != session.get("csrf"):
+            abort(400, "invalid CSRF token")
+        form = request.form
+        try:
+            if form.get("mode") == "folder":
+                project = manager.add_folder(form.get("name", ""), form.get("path", ""), form.get("url", ""),
+                                             form.get("image", ""))
+            else:
+                upload = request.files.get("file")
+                if not upload or not upload.filename:
+                    return jsonify({"error": "Choose a .zip archive or a source file to upload."}), 400
+                name = form.get("name") or Path(upload.filename).stem
+                project = manager.add_upload(name, upload.filename, upload.stream, form.get("url", ""),
+                                             form.get("image", ""))
+        except ProjectError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"project": project, "target_id": project["id"]}), 201
+
+    @app.errorhandler(413)
+    def too_large(_exc):
+        return jsonify({"error": "The file is too large (limit 200 MB). Exclude node_modules or build folders."}), 413
 
     @app.delete("/api/scans/<int:scan_id>")
     def api_delete_scan(scan_id: int):

@@ -1,0 +1,1008 @@
+================================================================================
+                    SMARTVULN - STUDY GUIDE FOR THE ORAL EXAM
+        Everything about the project, explained simply, with likely questions
+================================================================================
+
+HOW TO USE THIS GUIDE
+  Part A explains the project from zero (read it once, slowly).
+  Part B is a list of questions a professor is likely to ask, with model answers.
+  Part C is the live demonstration script, step by step, with what to say.
+  Part D is a one-page cheat sheet (numbers, commands, ports) to revise last.
+
+CONTENTS
+  PART A - UNDERSTANDING THE PROJECT
+    A1.  The 30-second and 2-minute pitch
+    A2.  The problem SmartVuln solves
+    A3.  Security vocabulary you must master
+    A4.  Architecture (big picture + diagram)
+    A5.  Technologies used and WHY each was chosen
+    A6.  What happens when you click "Start scan" (step by step)
+    A7.  The three scanners in detail
+    A8.  The analysis engine in detail (with worked examples)
+    A9.  The database
+    A10. The dashboard: every page
+    A11. API and command line
+    A12. The 5 custom Semgrep rules + the route mapper
+    A13. The two target applications (Juice Shop and LabShop)
+    A14. LabShop's 11 vulnerabilities: exploit, detection, fix
+    A15. Evaluation: ground truth, precision, recall
+    A16. Results and numbers to remember
+    A17. How SmartVuln protects itself (security of the tool)
+    A18. Tests and CI/CD
+    A19. Problems met during development and how they were solved
+    A20. Limitations and future work
+  PART B - LIKELY PROFESSOR QUESTIONS AND ANSWERS (75)
+  PART C - DEMONSTRATION SCRIPT
+  PART D - CHEAT SHEET
+
+
+################################################################################
+                       PART A - UNDERSTANDING THE PROJECT
+################################################################################
+
+--------------------------------------------------------------------------------
+A1. THE PITCH
+--------------------------------------------------------------------------------
+30 SECONDS:
+  "SmartVuln is a web vulnerability assessment platform. It runs three
+  complementary scanners - Semgrep for source code (SAST), OWASP ZAP for the
+  running application (DAST) and Trivy for dependencies and containers (SCA) -
+  then a Python analysis engine merges their results into one format, removes
+  duplicates, links findings that describe the same problem, scores the risk in a
+  transparent way and compares scans before and after fixes. Everything is
+  controlled from a Flask dashboard."
+
+2 MINUTES (add this):
+  "Each scanner alone sees only part of the picture and speaks its own format.
+  Semgrep sees code but not the running app; ZAP sees HTTP behaviour but not the
+  code; Trivy sees libraries but not your logic. SmartVuln's value is the engine:
+  it normalizes the three reports, correlates them - for example it can link a
+  SQL injection reported by ZAP on /api/products/search to the exact line in
+  routes/products.js reported by Semgrep, thanks to a route mapper I wrote that
+  reads the Express routes - and it gives each finding an explained risk score.
+  I demonstrated it on OWASP Juice Shop and on LabShop, a small vulnerable shop I
+  built with 11 deliberate weaknesses. After fixing them, the comparison went from
+  330 findings to 7, with 323 resolved and none new, and SmartVuln correctly
+  distinguished real fixes from scanner noise."
+
+--------------------------------------------------------------------------------
+A2. THE PROBLEM
+--------------------------------------------------------------------------------
+  - Companies use several security scanners because each technique has blind
+    spots. But every tool produces a different report format, overlapping
+    findings, different severity scales, and many false positives.
+  - Security teams waste time merging reports by hand, re-reading the same issue
+    three times, and cannot easily answer "did our fixes work?".
+  - SmartVuln automates this: run, normalize, deduplicate, correlate, prioritize,
+    triage, compare - with full traceability back to the original scanner output.
+
+--------------------------------------------------------------------------------
+A3. VOCABULARY YOU MUST MASTER
+--------------------------------------------------------------------------------
+  SAST (Static Application Security Testing)
+     Analyses SOURCE CODE without running it. Finds dangerous code patterns
+     (SQL built from user input, eval, hard-coded keys). Tool: Semgrep.
+     + sees exact file and line; - cannot know if the code is really reachable.
+
+  DAST (Dynamic Application Security Testing)
+     Attacks the RUNNING application over HTTP like a hacker would. Tool: ZAP.
+     + proves the problem is reachable; - doesn't know which line of code is
+     responsible, only sees pages it can reach (crawler coverage).
+
+  SCA (Software Composition Analysis)
+     Checks third-party components (npm packages, OS packages in a Docker image)
+     against databases of known vulnerabilities. Tool: Trivy. Trivy also finds
+     hard-coded secrets and configuration problems (Dockerfile).
+
+  CVE   Common Vulnerabilities and Exposures: public ID of a known vulnerability
+        in a specific product (e.g. CVE-2025-13465 in lodash).
+  GHSA  GitHub Security Advisory ID (same idea, GitHub's database).
+  CWE   Common Weakness Enumeration: the TYPE of weakness (CWE-89 = SQL
+        injection, CWE-79 = XSS, CWE-22 = path traversal, CWE-78 = command
+        injection, CWE-601 = open redirect, CWE-798 = hard-coded credentials,
+        CWE-916 = weak password hash).
+  CVSS  Common Vulnerability Scoring System: 0-10 severity score of a CVE.
+  OWASP Open Worldwide Application Security Project (makes ZAP and Juice Shop,
+        publishes the OWASP Top 10).
+  True positive (TP)    reported and real.
+  False positive (FP)   reported but not real / not exploitable.
+  False negative (FN)   real but NOT reported (the dangerous one).
+  Precision = TP / (TP + FP)  -> "when it reports something, how often is it right?"
+  Recall    = TP / (TP + FN)  -> "of the real problems, how many did it find?"
+  Correlation   recognising that several findings describe the same problem.
+  Deduplication merging exact or near-exact duplicates.
+  Triage        human review: confirm a finding or reject it as false positive.
+  Fingerprint   stable identity of a finding, used to recognise it across scans.
+  Taint analysis  following untrusted data ("source", e.g. req.query) to a
+        dangerous function ("sink", e.g. eval) - used by one custom rule.
+  Seed URL      an address given to ZAP because its crawler can't find it alone.
+  Ground truth  a list of vulnerabilities verified manually, used to measure
+        scanner accuracy.
+
+--------------------------------------------------------------------------------
+A4. ARCHITECTURE
+--------------------------------------------------------------------------------
+                         +-------------------------------+
+   Browser  -----HTTP--> |  Flask dashboard (port 5000)  |
+                         |  pages + JSON API             |
+                         +---------------+---------------+
+                                         | starts a background thread
+                                         v
+                         +-------------------------------+
+                         |  Orchestrator (Python)        |
+                         +--+-----------+------------+---+
+                            |           |            |   docker run ...
+                 +----------v--+ +------v------+ +---v-----------+
+                 | Semgrep     | | Trivy       | | OWASP ZAP     |
+                 | (container) | | (container) | | (container)   |
+                 | reads code  | | image + fs  | | attacks app   |
+                 +------+------+ +------+------+ +-------+-------+
+                        |  raw JSON     |  raw JSON       |  raw JSON
+                        v               v                 v
+                 +-------------------------------------------------+
+                 | Analysis engine: normalize -> correlate ->      |
+                 | triage -> score                                 |
+                 +------------------------+------------------------+
+                                          v
+                 +-------------------------------------------------+
+                 | SQLite database  +  report files (HTML/JSON/MD) |
+                 +-------------------------------------------------+
+
+   Targets run in Docker on a private network "smartvuln-net":
+     juice-shop (port 3000)  and  labshop (port 3100), bound to 127.0.0.1 only.
+   ZAP joins that network and reaches them by name (http://labshop:3000).
+
+   Code organisation (Python package "smartvuln"):
+     scanners/   one adapter per tool (base.py has the common logic)
+     engine/     normalize, taxonomy, routemap, correlation, scoring, triage,
+                 compare, pipeline
+     database/   store.py (SQLite)
+     reports/    HTML/Markdown report generation
+     app/        Flask dashboard (routes, templates, CSS)
+     orchestrator.py, scan_manager.py, cli.py, config.py, evaluation.py
+
+--------------------------------------------------------------------------------
+A5. TECHNOLOGIES AND WHY
+--------------------------------------------------------------------------------
+  Python 3.11+   main language: rich ecosystem, readable, standard for security
+                 tooling; ~3,800 lines in the smartvuln package.
+  Flask          lightweight web framework: enough for a dashboard + JSON API,
+                 no heavy framework needed for a mini-project.
+  Jinja2         HTML templates (comes with Flask).
+  HTML/CSS/JS    plain, no React/Vue: fewer dependencies, easy to explain.
+  Chart.js       simple charts (bars) on Overview and Compare.
+  SQLite         file database, zero installation, perfect for one user;
+                 supports foreign keys + cascade delete + transactions.
+  Docker / Compose  every scanner runs from its OFFICIAL image -> no local
+                 installation, same behaviour on Windows, Linux and in CI;
+                 targets are isolated in containers on a private network.
+  Semgrep        fast, open-source SAST, rules in readable YAML, easy custom
+                 rules, supports JavaScript/TypeScript (our targets).
+  OWASP ZAP      the reference open-source DAST tool; scriptable with its
+                 "Automation Framework" (a plan file).
+  Trivy          open-source SCA; scans container images, lockfiles, secrets
+                 and Dockerfiles with one tool.
+  TOML           readable configuration file (config/smartvuln.toml).
+  GitHub Actions CI pipeline to run tests and scans automatically on push.
+  pytest         automated tests.
+  Not used on purpose: Kubernetes, cloud, machine learning, paid APIs (the
+  subject asked for a simple, reproducible mini-project).
+
+--------------------------------------------------------------------------------
+A6. WHAT HAPPENS WHEN YOU CLICK "START SCAN"
+--------------------------------------------------------------------------------
+  1. The Scan Center page first calls GET /api/targets?target=labshop and shows
+     PRE-FLIGHT checks: Docker running? source folder present? target host in the
+     allow-list? application answering? running container built from the current
+     source code? scanner images available?
+  2. You choose target + scanners + a name, click Start scan.
+  3. The browser sends POST /api/scans {target, scanners, label} with a CSRF
+     token (protection against forged requests).
+  4. The server, in ONE database transaction: refuses if a scan of this target is
+     already running (HTTP 409); computes the scan number = highest existing
+     number + 1; inserts the scan (status "running") and one "pending" row per
+     scanner. It answers HTTP 202 (accepted) with the scan number immediately.
+  5. A background thread runs the orchestrator:
+       a. creates data/scans/NNNN/raw and /logs
+       b. runs Semgrep and Trivy IN PARALLEL (they don't need the running app)
+       c. then ZAP, after checking the target is healthy
+       d. each scanner's state is written to the database as it changes
+          (pending -> running -> completed/failed), and every line the scanner
+          prints is saved (database + log file) so you can watch it live
+       e. ANALYSIS: normalize -> correlate -> apply analyst verdicts -> score
+       f. saves all findings in SQLite
+       g. writes reports (HTML, normalized JSON, Markdown summary, comparison
+          with the previous scan of the same target)
+       h. marks the scan completed / partial / failed
+  6. Meanwhile the page polls every 2 seconds: scan status + new log lines.
+  7. When finished: "View results" opens the Overview.
+
+--------------------------------------------------------------------------------
+A7. THE THREE SCANNERS IN DETAIL
+--------------------------------------------------------------------------------
+COMMON RULES (scanners/base.py):
+  - each scanner runs as a Docker container with a unique name;
+  - output is streamed line by line to the live log (secrets masked);
+  - timeout (20-30 min): if exceeded, the container is killed ("docker rm -f");
+  - the raw report is ALWAYS kept, even if the tool exits with an error code.
+    Example: ZAP exits with code 2 when it found warnings - the report is valid
+    and kept. Status depends on "is there a parseable report?", not on the code.
+  - five statuses: success, completed_with_errors, failed, timeout, skipped.
+
+SEMGREP (SAST)
+  - Image semgrep/semgrep:latest (version 1.183.0 during the project).
+  - Source folder mounted READ-ONLY at /src.
+  - Rulesets: p/javascript, p/typescript, p/nodejs (public registry) + our 5
+    custom rules. Excludes node_modules, tests, build output.
+  - Options: --json output, --metrics=off (no telemetry), 30 s timeout per file.
+  - Output: semgrep.json.
+
+OWASP ZAP (DAST) - version 2.17.0
+  SmartVuln generates a ZAP "Automation Framework" plan:
+    1. requestor : visits seed URLs (endpoints the crawler can't find) and
+                   performs a login with the lab account (to see the session
+                   cookie)
+    2. spider    : crawls the site (2 minutes max)
+    3. passive scan : analyses all responses (headers, cookies, leaks)
+    4. active scan  : sends attack payloads, "targeted" profile = 9 rules:
+         40018 SQL Injection        40012 XSS reflected   40014 XSS persistent
+         6 Path Traversal           90020 OS Command Injection
+         20019 External Redirect    40009 Server Side Include
+         90019 Server Side Code Injection   0 Directory Browsing
+       limited to 10 min total / 3 min per rule (keeps scans and CI short)
+    5. reports: zap-report.json + zap-report.html
+  - Safety: refuses any host not in the allow-list, waits until the target's
+    health check answers before attacking.
+
+TRIVY (SCA)
+  - Image aquasec/trivy:latest. Two jobs:
+     a) image scan of the DEPLOYED container (OS packages + node_modules)
+     b) filesystem scan of the source: lockfiles, SECRETS, MISCONFIGURATIONS
+  - Its vulnerability database is cached in a Docker volume (fast later runs).
+  - Why scan the image? Juice Shop's repository has no lockfile, so the real
+    list of dependencies is only in the built image.
+
+--------------------------------------------------------------------------------
+A8. THE ANALYSIS ENGINE (THE ORIGINAL PART)
+--------------------------------------------------------------------------------
+A8.1 NORMALIZATION
+  Every scanner result becomes a "Finding" with the same fields:
+    identity  : id, fingerprint, scanner, scan type (SAST/DAST/SCA), rule id,
+                title, vulnerability class, CWE list, CVE list
+    rating    : severity (critical/high/medium/low/info), confidence
+    location  : file + line | URL + HTTP method + parameter | package + version
+                + fixed version
+    content   : description, remediation, evidence, references, CVSS
+    raw       : the ORIGINAL scanner record, untouched (traceability)
+  Severity mapping examples: Semgrep ERROR -> high, WARNING -> medium;
+  ZAP risk 3 -> high, 2 -> medium; Trivy CRITICAL -> critical.
+  Golden rule: never invent data. Trivy gives no confidence -> field stays empty.
+  Dependency CVEs get the class "vulnerable-dependency" so a library XSS is never
+  merged with an XSS in the application's own code.
+
+A8.2 VULNERABILITY CLASS (taxonomy.py)
+  CWE numbers and keywords are mapped to classes (sql-injection, xss,
+  path-traversal, hardcoded-secret...). This lets the engine see that Semgrep's
+  "CWE-89" and ZAP's "SQL Injection" talk about the same TYPE of problem.
+
+A8.3 FINGERPRINT (to recognise the same finding in two scans)
+  SAST : scanner + rule + file + line
+  DAST : scanner + rule + method + URL without query string + parameter
+  SCA  : scanner + advisory + package + location (NOT the version)
+
+A8.4 CORRELATION - 4 rules (a shared severity or CWE ALONE never links findings)
+  R1 same-advisory     two dependency findings with the same CVE AND same package
+  R2 same-code-location same file, lines within +/-2, same vulnerability class
+                       Example: Semgrep and Trivy both flag lib/keys.js line 4.
+  R3 endpoint-handler  a ZAP finding on URL X + a Semgrep finding of the SAME
+                       class in the file that handles X.
+                       Example: ZAP "SQL Injection" on GET /api/products/search
+                       + Semgrep SQL rule in routes/products.js line 12.
+  R4 same-endpoint     two ZAP rules, same class, same URL and parameter.
+  Linked findings form a GROUP (union-find algorithm). The most severe member is
+  the "primary"; the others are marked "likely duplicate" - never deleted.
+
+A8.5 THE ROUTE MAPPER (my Python custom analysis, engine/routemap.py)
+  Problem: ZAP gives URLs, Semgrep gives files - no common key.
+  Solution: parse the Express entry file (server.ts / server.js):
+     import { searchProducts } from './routes/products.js'
+     app.get('/api/products/search', searchProducts)
+  -> table: GET /api/products/search  ->  routes/products.js
+  108 routes found in Juice Shop. Used by rule R3 and by the risk factor
+  "the code file is an HTTP route handler".
+
+A8.6 RISK SCORE (0-100), all weights configurable
+  score = base x confidence multiplier + adjustments   (clamped to 0-100)
+  base: critical 90, high 70, medium 45, low 20, info 5
+        (dependencies: CVSS x 10, using the CVSS from the same source as the
+         severity, e.g. Debian or GitHub)
+  confidence: high x1.0, medium x0.85, low x0.6, not provided x0.85 (neutral)
+  adjustments (ONLY when there is evidence):
+     +10 ZAP's attack payload worked          +10 confirmed by another scanner
+     +5  rule says likelihood is high (-5 low) +5  code file is a route handler
+     +5  observed on the running application   -15 test / tooling code
+  priority: P1 >= 80, P2 >= 60, P3 >= 35, otherwise P4.
+
+  WORKED EXAMPLE 1 - LabShop SQL injection (Semgrep custom rule) = 90
+     severity high -> 70 ; confidence high -> x1.0 -> 70
+     +5 rule likelihood high, +10 also found by ZAP, +5 products.js is a route
+     handler -> 90 -> P1
+  WORKED EXAMPLE 2 - Juice Shop "External Redirect" (ZAP) = 84
+     high 70 x medium confidence 0.85 = 59.5 ; +10 attack worked ; +10 also
+     found by Semgrep ; +5 observed on running app -> 84.5 -> 84 -> P1
+  WORKED EXAMPLE 3 - a critical CVE with CVSS 9.8 = 83
+     98 x 0.85 (Trivy gives no confidence -> neutral) = 83.3 -> P1
+  Every factor is shown with a sentence on the finding page ("Risk score").
+
+A8.7 TRIAGE
+  Automatic: only "needs verification" or "likely duplicate" (never confirms or
+  rejects by itself). Manual: "confirmed" or "false positive", requires analyst
+  name + justification (min 10 characters), stored per FINGERPRINT with history,
+  so the verdict follows the finding into future scans. False positive -> score 0.
+
+A8.8 SCAN COMPARISON (before -> after)
+  new          only in the after scan
+  remaining    in both (= persistent)
+  resolved     gone AND its scanner ran successfully (for ZAP: the rule no
+               longer fires anywhere on the site)
+  not re-tested  gone, but its scanner did not run -> NOT counted as fixed
+  not observed   ZAP didn't report that URL again but the same rule still fires
+                 elsewhere (ZAP explores different URLs each run) -> remaining
+  moved          same code warning, only the line number changed -> remaining
+  + severity changes and scanner coverage changes.
+  Why these rules: without them, an unchanged app scanned twice showed 5 fake
+  "resolved" findings; with them: 0.
+
+--------------------------------------------------------------------------------
+A9. THE DATABASE (SQLite, data/smartvuln.db)
+--------------------------------------------------------------------------------
+  scans         one row per scan: number, dates, target, source version, name,
+                status, phase, progress, statistics
+  scanner_runs  one row per scanner per scan: status, exit code, duration,
+                version, error, output tail, raw report paths, findings count
+  findings      every normalized finding (full JSON + indexed columns)
+  triage        current analyst verdict per fingerprint
+  triage_log    history of verdicts (audit trail)
+  scan_logs     the live log lines
+  Relations: scanner_runs, findings, scan_logs reference scans with
+  "ON DELETE CASCADE": deleting a scan deletes its rows automatically.
+  Triage is NOT linked to a scan (it's per finding fingerprint) -> survives.
+  Scan numbering: next number = highest existing number + 1 (computed inside a
+  locked transaction -> no duplicates). Delete all -> next is #1; delete the
+  last one -> its number is reused; a gap in the middle is not refilled (keeps
+  chronological order, which Compare uses to find "the previous scan").
+
+--------------------------------------------------------------------------------
+A10. THE DASHBOARD (http://127.0.0.1:5000)
+--------------------------------------------------------------------------------
+  Top bar: Overview, Findings, Compare, History, Reports, Logs; a running-scan
+  indicator; the Light/Dark theme switch (sun/moon, remembered in the browser);
+  the "Scan Center" button.
+
+  SCAN CENTER - start real scans. "What to scan" has 3 tabs:
+    UPLOAD (drop a .zip or a single file, up to 200 MB), FOLDER ON THIS PC (a folder
+    path, scanned in place read-only), SAVED (built-in apps + your projects).
+    Optional: app URL (for ZAP, local only) and Docker image (for Trivy). Without a
+    URL, ZAP is disabled ("Needs app URL"); Semgrep + Trivy still run. Then: target info, "Open" link to the app, the
+    address used inside Docker, source version, image; checkboxes Semgrep /
+    Trivy / OWASP ZAP with Ready / Not ready; scan name (suggests "Scan #N");
+    problems in plain language ("Docker isn't running..."); pre-flight list;
+    Start scan. Then live: status, phase, elapsed time, progress bar, table of
+    scanners (Pending / Running / Completed / Failed, findings, duration, raw
+    report links), live execution log, "View results".
+  OVERVIEW - one scan: target, scan number, name, date, duration, source version,
+    scan selector, Report and Logs buttons; metric strip (unique issues, per
+    severity, seen by 2+ scanners); severity bar; scanner table; chart "Findings
+    by scanner"; top 10 by risk with every scanner that found each issue.
+  FINDINGS - search + filters (severity, scanner, type, unique only; more:
+    class, CWE/CVE, correlation, triage, priority, sort); table.
+  FINDING DETAIL - where (file/URL/package + highlighted source code), what,
+    fix; expandable: evidence, risk score breakdown, related findings with the
+    correlation reason, references, original scanner record; triage form and
+    history; details (rule, confidence, CVSS, fingerprint, group).
+  COMPARE - choose before/after (same target, finished scans); Before, After,
+    Resolved, Remaining, New (Not re-tested); charts by severity and by scanner;
+    lists; export as HTML.
+  HISTORY - every scan: number, name, target, date, duration, scanner statuses,
+    findings; Compare (with previous scan of same target), Logs, DELETE SCAN
+    (confirmation dialog, must type the scan number; removes the scan, its
+    findings, logs and its folder; keeps other scans and verdicts; a running
+    scan cannot be deleted); New scan button.
+  REPORTS - only files that really exist: HTML report, summary, normalized
+    JSON, comparison HTML/JSON, original scanner reports.
+  LOGS - per scan and per source: scanner table and full execution log.
+  Empty states everywhere when there is no data (no fake data, ever).
+
+--------------------------------------------------------------------------------
+A11. API AND COMMAND LINE
+--------------------------------------------------------------------------------
+  GET    /api/targets?target=<id>   pre-flight checks
+  POST   /api/scans                 start {target, scanners, label} -> 202/400/409
+  GET    /api/scans, /api/scans/<id>, /api/scans/<id>/logs?after=<n>
+  DELETE /api/scans/<id>            body {"confirm": <id>} -> 200/400/404/409
+  CLI (python -m smartvuln ...): scan, import, list, targets, compare, report,
+  reanalyze, delete, triage, health, serve, evaluate.
+
+--------------------------------------------------------------------------------
+A12. CUSTOM DETECTION
+--------------------------------------------------------------------------------
+  5 original Semgrep rules (YAML), each with a test file (semgrep --test: 5/5):
+  1. smartvuln-raw-sql-interpolation (CWE-89)
+     SQL built with ${...} or "+" passed to query/prepare/exec/all/get/run on a
+     database object.  BAD:  db.prepare(`...LIKE '%${q}%'`)
+                        GOOD: db.prepare('...LIKE ?').all(`%${q}%`)
+  2. smartvuln-request-data-code-execution (CWE-94, TAINT mode)
+     follows request data (req.body/query/params...) into eval / new Function /
+     vm contexts.
+  3. smartvuln-substring-url-allowlist (CWE-601)
+     URL allow-list checked with includes()/indexOf(): "https://evil.com/?trusted.com"
+     contains "trusted.com" and passes.
+  4. smartvuln-hardcoded-crypto-key (CWE-798/321)
+     private keys, HMAC/JWT secrets, cookie secrets written in code.
+  5. smartvuln-weak-password-hash (CWE-916)
+     createHash('md5' or 'sha1').
+  + Python custom analysis: the route mapper (A8.5).
+  Honest note: rules were written after studying the targets -> on these targets
+  they are very precise, but that precision is optimistic (bias).
+
+--------------------------------------------------------------------------------
+A13. THE TWO TARGETS
+--------------------------------------------------------------------------------
+  OWASP JUICE SHOP v20.3.0 - famous intentionally vulnerable shop (TypeScript,
+    Node.js, Express, Angular). Large and realistic. Browser: localhost:3000.
+    Source cloned (tag v20.3.0) for Semgrep; image bkimminich/juice-shop for Trivy.
+  LABSHOP - a small vulnerable shop I built for the before/after demonstration
+    (Node.js 22, Express, SQLite via node:sqlite, plain HTML). Browser:
+    localhost:3100. Lab accounts alice@labshop.test / alice123 and
+    admin@labshop.test / admin2024. /health returns a hash of the code it was
+    built from -> SmartVuln warns if you forgot to rebuild after editing code.
+  Both listen on 127.0.0.1 only and are on a private Docker network.
+
+--------------------------------------------------------------------------------
+A14. LABSHOP'S 11 VULNERABILITIES
+--------------------------------------------------------------------------------
+ 1 SQL injection - routes/products.js
+   Exploit: q=zz' UNION SELECT id,email,password,role FROM users--  dumps users.
+   Found by: Semgrep (custom rule) + ZAP -> correlated (rule R3).
+   Fix: bound parameter "?" instead of building the SQL string.
+ 2 Reflected XSS - routes/search.js
+   Exploit: /search?q=<script>alert(1)</script> runs in the browser.
+   Found by: Semgrep only (ZAP MISSED it - a real DAST false negative).
+   Fix: HTML-escape output. Semgrep still flags it after the fix -> false
+   positive to triage (it doesn't understand our escape function).
+ 3 Path traversal - routes/files.js
+   Exploit: /download?file=../../etc/passwd reads system files.
+   Found by: Semgrep + ZAP -> correlated.  Fix: path.basename + sendFile root.
+ 4 Open redirect - routes/redirect.js
+   Exploit: /go?url=https://evil.example sends victims to a phishing site.
+   Found by: ZAP only.  Fix: allow-list of partner keys (/go?to=example).
+ 5 OS command injection - routes/tools.js
+   Exploit: host=localhost; id  executes a shell command on the server.
+   Found by: ZAP only (Semgrep missed it).  Fix: dns.lookup, no shell at all.
+ 6 Hard-coded RSA private key - lib/keys.js (lab key, protects nothing)
+   Risk: anyone with the code can forge admin sessions.
+   Found by: Semgrep (custom) + Trivy (secret scanner) -> correlated (R2).
+   Fix: key from environment variable, or generated at start-up.
+ 7 Unsalted MD5 password hashes - lib/db.js
+   Risk: leaked hashes cracked in seconds.  Found by: Semgrep (custom).
+   Fix: scrypt with random salt + constant-time comparison.
+ 8 Session cookie without HttpOnly/SameSite - routes/auth.js
+   Found by: ZAP.  Fix: httpOnly + sameSite; also pin JWT algorithm RS256.
+ 9 Missing security headers, X-Powered-By, stack traces - server.js
+   Found by: ZAP (headers); stack traces not reported by any scanner.
+   Fix: helmet with a STRICT Content-Security-Policy, disable x-powered-by,
+   generic error page, own 404 handler.
+ 10 Vulnerable dependencies - package.json / package-lock.json
+   lodash 4.17.15, jsonwebtoken 8.5.1, express 4.17.1 (qs, path-to-regexp...).
+   Found by: Trivy.  Fix: upgrade (lodash 4.18.1, jsonwebtoken 9, express 4.22).
+   Trap: lodash 4.17.21 still had 2 CVEs fixed only in 4.18.0.
+ 11 Container image - Dockerfile (Debian base ~215 OS CVEs, npm inside, no
+   HEALTHCHECK).  Found by: Trivy.  Fix: node:22-alpine, remove npm, healthcheck.
+ Lesson: no single scanner found everything - that's why we combine them.
+
+--------------------------------------------------------------------------------
+A15. EVALUATION METHODOLOGY
+--------------------------------------------------------------------------------
+  - Ground truth: 17 Juice Shop vulnerabilities, each verified by reading the
+    code (based on Juice Shop's own annotations), with file/line and endpoint.
+  - A finding matches a ground-truth entry if same class AND (same file within
+    +/-3 lines, OR same endpoint + HTTP method).
+  - RECALL per scanner over the entries it can detect in principle.
+  - PRECISION only inside a "closed-world scope": 15 (file, class) pairs where
+    EVERY occurrence was reviewed by hand, so any unmatched finding there is a
+    real false positive. Outside it, I don't claim precision (an unknown finding
+    could be a real vulnerability I didn't list).
+  - DAST precision not computed (no complete DAST ground truth).
+  - Correlation quality: are findings of the same real vulnerability grouped?
+    Are different vulnerabilities wrongly merged?
+
+--------------------------------------------------------------------------------
+A16. RESULTS TO REMEMBER
+--------------------------------------------------------------------------------
+  JUICE SHOP (full scan): Semgrep 27, Trivy 169, ZAP 27 = 223 findings
+    -> 190 unique issues; 4 multi-scanner groups, 3 linking SAST and DAST
+    (login SQLi, search SQLi, open redirect) + private key (Semgrep+Trivy).
+    ~4 minutes. Rescan of the unchanged app: 0 falsely "resolved".
+  EVALUATION (17 vulnerabilities):
+    Recall: Semgrep 76% (13/17), ZAP 23% (3/13), Trivy secrets 33% (1/3),
+            all combined 76%. Missed by all: 3 NoSQL injections, DOM XSS.
+    Precision (closed world): Semgrep 81% (21/26); registry rules 64%;
+            custom rules 100% (12/12, biased).
+    Correlation: 4/4 multi-scanner vulnerabilities grouped, 0 wrong merges.
+  LABSHOP BEFORE FIXES: 330 findings (Semgrep 8, Trivy 290, ZAP 32)
+    -> 297 unique; ~2 min 12 s.
+  LABSHOP AFTER ALL FIXES (verified): 7 findings -> 323 resolved, 7 remaining,
+    0 new. Trivy 290 -> 0, ZAP 32 -> 3, Semgrep 8 -> 4 (the 4 are false
+    positives after correct fixes, to triage).
+  TESTS: 80 automated tests pass (+ 5/5 custom rule tests).
+  NOTE: your own demo numbers may differ slightly (scanner databases update daily).
+
+--------------------------------------------------------------------------------
+A17. SECURITY OF SMARTVULN ITSELF
+--------------------------------------------------------------------------------
+  - Allow-list: only juice-shop, labshop, localhost, 127.0.0.1,
+    host.docker.internal can be scanned (a scanner is an attack tool!).
+  - Vulnerable apps bound to 127.0.0.1 + private Docker network.
+  - Source code mounted read-only into scanner containers.
+  - Secrets masked in logs, evidence and the UI.
+  - CSRF tokens on all actions (start scan, delete, triage).
+  - Delete requires typing the scan number; running scans can't be deleted;
+    only the scan's own folder can be removed.
+  - File download routes serve only known files (no path traversal).
+  - The tool never auto-confirms or auto-dismisses a finding.
+
+--------------------------------------------------------------------------------
+A18. TESTS AND CI/CD
+--------------------------------------------------------------------------------
+  65 pytest tests (no Docker needed), in 6 files:
+    normalization of the 3 formats; correlation rules; scoring/triage/
+    comparison; scanner error handling (timeouts, crashes, missing reports,
+    Docker down, external target refused); database + every page + CSRF;
+    Scan Center API (full scan, concurrency 409, logs, deletion, numbering).
+  Trick: scanner containers are replaced by a fake that writes sample reports,
+  so the REAL orchestrator/engine/API are tested quickly.
+  GitHub Actions (.github/workflows/smartvuln.yml), on push / pull request:
+    job 1: unit tests + custom rule tests
+    job 2: start Juice Shop -> wait healthy -> scan -> evaluate -> summary page
+           -> upload reports as artifacts
+    Findings never fail the pipeline (reports are always collected).
+
+--------------------------------------------------------------------------------
+A19. PROBLEMS MET AND SOLVED (great for "what difficulties did you face?")
+--------------------------------------------------------------------------------
+  1. Semgrep doesn't run well on Windows -> all scanners in Docker.
+  2. Juice Shop has no lockfile -> Trivy scans the deployed image instead.
+  3. A Debian "low" CVE was scored P1 because I mixed Debian's severity with
+     NVD's CVSS 9.8 -> use the CVSS from the same source as the severity.
+  4. ZAP's crawler can't see single-page-app endpoints -> seed URLs.
+  5. ZAP's login seed had a wrong password -> session cookie flaws invisible ->
+     fixed and re-ran the baseline.
+  6. ZAP 2.17 stable doesn't include two rules I configured -> removed them
+     instead of claiming checks that never ran.
+  7. Two scans of an unchanged app showed fake "resolved" findings (ZAP samples
+     different URLs) -> "not observed" category.
+  8. Upgrading lodash showed the same CVE as resolved + new -> version removed
+     from the dependency fingerprint.
+  9. Fixing code shifted line numbers -> warnings appeared resolved + new ->
+     "moved" matching.
+ 10. The dashboard first only displayed results -> added the Scan Center with
+     real background execution and live logs.
+ 11. Forgetting to rebuild the app after a fix -> source-hash check.
+ 12. Deleted scans left the numbering counter high -> number = max existing + 1.
+
+--------------------------------------------------------------------------------
+A20. LIMITATIONS AND FUTURE WORK
+--------------------------------------------------------------------------------
+  Limitations: ZAP has no browser crawler (misses DOM XSS, missed LabShop's
+  reflected XSS); active scan limited to 9 rules / 10 min; route mapper only
+  reads simple app.get(...) lines in one file; small evaluation sample;
+  custom-rule precision biased; numbers vary as scanner databases update;
+  single-user local tool (no login).
+  Future work: AJAX/browser crawler and authenticated DAST; more languages for
+  the route mapper (Python/Java frameworks); user accounts and roles;
+  scheduling; export to SARIF/Jira; EPSS/KEV data for exploitability;
+  larger benchmark.
+
+
+################################################################################
+              PART B - LIKELY PROFESSOR QUESTIONS AND MODEL ANSWERS
+################################################################################
+
+--- GENERAL / MOTIVATION ---------------------------------------------------------
+Q1. What is SmartVuln in one sentence?
+  A platform that runs SAST, DAST and SCA scanners and intelligently merges,
+  correlates, prioritizes and compares their findings.
+
+Q2. Why combine three techniques instead of one?
+  Each has blind spots. In LabShop, Semgrep missed the command injection that ZAP
+  found, ZAP missed the XSS that Semgrep found, and only Trivy saw the vulnerable
+  libraries. Combined coverage is higher (Juice Shop recall: 76% combined).
+
+Q3. What is the added value compared with just running the tools?
+  The engine: one normalized format, deduplication, cross-scanner correlation
+  (including SAST<->DAST via the route mapper), transparent risk scoring, triage
+  that persists across scans, and reliable before/after comparison.
+
+Q4. Who would use it?
+  A development or security team that wants to check an application regularly
+  and verify that fixes really reduce the risk.
+
+--- SAST / DAST / SCA -----------------------------------------------------------
+Q5. Difference between SAST and DAST?
+  SAST reads code without running it (exact line, but no proof of
+  reachability). DAST attacks the running app (proof of exploitability, but no
+  code location, limited to reachable pages).
+
+Q6. What does SCA find that the others can't?
+  Known vulnerabilities (CVEs) in third-party libraries and OS packages, plus
+  secrets and Dockerfile misconfigurations (with Trivy).
+
+Q7. What is a CVE vs a CWE?
+  CVE = one specific known vulnerability in a product version. CWE = the
+  category of weakness. A CVE usually belongs to a CWE.
+
+Q8. Why scan the Docker image and not just package.json?
+  The image contains what really runs: all installed dependencies and OS
+  packages. Juice Shop's repo has no lockfile, so the image is the only accurate
+  inventory.
+
+--- ARCHITECTURE / CHOICES ------------------------------------------------------
+Q9. Why Docker for the scanners?
+  No local installation, official versions, identical behaviour on Windows,
+  Linux and CI, and isolation from the host.
+
+Q10. Why Flask and not Django?
+  The dashboard is small: some pages and a JSON API. Flask is lighter and easier
+  to explain; Django's ORM, admin and auth weren't needed.
+
+Q11. Why SQLite?
+  Single-user local tool, zero installation, one file, supports transactions,
+  foreign keys and cascade deletion. For multiple users I'd move to PostgreSQL.
+
+Q12. Why does the scan run in a background thread?
+  Scans take minutes; an HTTP request can't wait that long. The API answers 202
+  immediately and the page polls status and logs.
+
+Q13. Why do Semgrep and Trivy run in parallel but ZAP after?
+  Semgrep and Trivy don't need the running app and don't interfere. ZAP needs a
+  healthy target and is the heaviest, so it runs last after a health check.
+
+Q14. How do you avoid two scans at the same time?
+  Inside one database transaction the server checks for a running scan of the
+  same target and refuses with HTTP 409.
+
+--- ENGINE ----------------------------------------------------------------------
+Q15. What is normalization and why is it needed?
+  Converting three different JSON formats into one Finding structure, so findings
+  can be compared, correlated, scored and displayed the same way.
+
+Q16. How do you deduplicate?
+  Exact duplicates (same fingerprint) are collapsed. Near-duplicates are linked
+  by rules R1-R4 into groups; one primary, others "likely duplicate"; nothing is
+  deleted.
+
+Q17. Explain your correlation rules.
+  R1 same CVE + same package; R2 same file, lines within 2, same class; R3 ZAP URL
+  handled by a file where Semgrep reports the same class; R4 two ZAP rules on the
+  same URL+parameter with the same class.
+
+Q18. Why not merge findings that have the same CWE?
+  Same CWE doesn't mean same problem: two SQL injections in two different files
+  are two problems. We always require a location match.
+
+Q19. How do you link a ZAP URL to a line of code?
+  The route mapper parses the Express routes (import + app.get) to know which
+  file handles each URL; then R3 links ZAP and Semgrep findings of the same class
+  in that file.
+
+Q20. How is the risk score calculated? Give an example.
+  base(severity) x confidence + evidence-based adjustments. LabShop SQLi:
+  70 x 1.0 + 5 (likelihood) + 10 (confirmed by ZAP) + 5 (route handler) = 90, P1.
+
+Q21. Why not use CVSS for everything?
+  Code and HTTP findings don't have a CVSS. CVSS is used for dependencies when
+  provided, otherwise severity points.
+
+Q22. What if a scanner doesn't provide confidence?
+  We don't invent it: a neutral 0.85 multiplier is used and the page says
+  "confidence not provided - neutral, not evidence".
+
+Q23. How do you handle false positives?
+  The tool never auto-dismisses. An analyst marks "false positive" with a
+  justification; it's stored per fingerprint, applies to future scans and sets
+  the score to 0. Example: the Semgrep XSS warnings remaining after the fix.
+
+Q24. What is a fingerprint and why does it exclude the version for dependencies?
+  The identity used to recognise a finding across scans. Excluding the version
+  means a CVE that still applies after an upgrade counts as remaining, not as
+  resolved+new.
+
+Q25. How does the comparison decide something is "resolved"?
+  It must be absent AND its scanner must have run successfully; for ZAP, the
+  same rule must no longer fire anywhere on the site. Otherwise it's "not
+  re-tested" or "not observed".
+
+Q26. Why the "not observed" category?
+  ZAP explores slightly different URLs each run. Two scans of an unchanged Juice
+  Shop showed 5 fake "resolved" findings; with this rule, 0.
+
+Q27. What is "moved"?
+  When a fix changes line numbers, the same warning appears at another line. We
+  pair them (same scanner, rule, file) and count them as remaining.
+
+--- CUSTOM DETECTION ------------------------------------------------------------
+Q28. Show me one custom rule and explain it.
+  smartvuln-raw-sql-interpolation: matches db.prepare/query/... called with a
+  template literal containing ${...} or a string concatenation, on an object
+  named like a database. It flags db.prepare(`...${q}...`) but not
+  db.prepare('... ?').all(q).
+
+Q29. What is taint mode?
+  Semgrep follows data from sources (req.query, req.body) to sinks (eval, vm).
+  Our code-execution rule uses it to catch indirect flows.
+
+Q30. How did you test your rules?
+  Each rule has a .ts file with lines marked "ruleid" (must match) and "ok" (must
+  not match); semgrep --test passes 5/5.
+
+Q31. Limits of your rules?
+  Based on syntax and naming; e.g. a SQL string built in a variable first is
+  missed; weak-hash rule can't know if MD5 is used for passwords or checksums.
+
+--- EVALUATION ------------------------------------------------------------------
+Q32. How did you measure accuracy?
+  17 manually verified Juice Shop vulnerabilities (ground truth). Recall per
+  scanner; precision only in a closed-world scope; correlation quality.
+
+Q33. What is the closed-world scope and why?
+  15 (file, class) pairs where I reviewed every occurrence, so unmatched
+  findings there are true false positives. Outside, I can't tell an unknown real
+  bug from a false positive, so I don't claim precision.
+
+Q34. Your custom rules have 100% precision - isn't that suspicious?
+  Yes, it's biased: I wrote them after studying the code. It shows they work on
+  the code they were designed for, not how they generalize. I say it explicitly.
+
+Q35. Recall of ZAP is only 23% - is ZAP bad?
+  No: many ground-truth entries are in code paths ZAP can't reach without a
+  browser crawler or authentication, and I limited the active scan to 9 rules /
+  10 minutes. It's a coverage limit, documented.
+
+Q36. Is 17 vulnerabilities enough for statistics?
+  No; it's a reproducible case study, not a benchmark. Future work: larger set.
+
+--- LABSHOP / DEMO --------------------------------------------------------------
+Q37. Why did you build LabShop when Juice Shop exists?
+  Juice Shop is too big to fix in a demo. LabShop has 11 controlled
+  vulnerabilities across code, config, dependencies and container, so I can fix
+  them and prove the comparison works.
+
+Q38. Which LabShop vulnerability is detected by two scanners?
+  SQL injection (Semgrep+ZAP), path traversal (Semgrep+ZAP), hard-coded key
+  (Semgrep+Trivy).
+
+Q39. Why do 4 Semgrep findings remain after the fixes?
+  They're false positives: the code is fixed (escaped output, basename+root) but
+  Semgrep's generic rules don't recognize the protection. We triage them.
+
+Q40. Why does ZAP still report "Absence of Anti-CSRF Tokens"?
+  It's true: the login form has no CSRF token. Left as an optional exercise.
+
+Q41. How did Trivy go from 290 to 0?
+  Upgrading the vulnerable npm packages and switching to node:22-alpine with npm
+  removed (most CVEs were in Debian base packages and npm's own modules).
+
+Q42. How does SmartVuln know the app was rebuilt?
+  LabShop's /health returns a hash of its source files; SmartVuln computes the
+  same hash on disk and warns if they differ.
+
+Q43. How do you exploit the SQL injection?
+  /api/products/search?q=zz' UNION SELECT id,email,password,role FROM users--
+  returns all users and password hashes.
+
+Q44. Why is MD5 bad for passwords?
+  Fast and unsalted: GPUs test billions per second and precomputed tables exist.
+  Use slow salted algorithms (scrypt, bcrypt, argon2).
+
+Q45. Why is the open redirect dangerous?
+  Phishing: the link shows your trusted domain but sends the victim elsewhere.
+
+Q46. What does Content-Security-Policy do?
+  Tells the browser which sources of scripts/styles/images are allowed; strongly
+  limits XSS impact.
+
+--- SECURITY / ETHICS -----------------------------------------------------------
+Q47. Could someone use SmartVuln to attack a real website?
+  By default no: only allow-listed local hosts can be scanned; anything else is
+  refused unless explicitly enabled with --allow-external, which should only be
+  used on authorized targets.
+
+Q48. How do you protect the dashboard actions?
+  CSRF tokens; delete requires retyping the scan number; only known files can
+  be downloaded; secrets masked.
+
+Q49. Isn't committing a private key dangerous?
+  The LabShop key was generated only for the lab and protects nothing; it's a
+  deliberate vulnerability. In a real project it must be rotated and removed.
+
+--- DATA / DATABASE -------------------------------------------------------------
+Q50. What happens when I delete a scan?
+  Confirmation (type the number) -> its findings, scanner runs and logs are
+  deleted by cascade, its folder removed; other scans and verdicts kept; a later
+  scan compared with it gets its comparison report regenerated.
+
+Q51. How are scan numbers assigned?
+  Highest existing number + 1, inside a locked transaction -> no duplicates;
+  deleting the last scans frees their numbers; gaps aren't refilled to keep
+  chronological order.
+
+Q52. Where are raw scanner reports kept?
+  data/scans/NNNN/raw/ (semgrep.json, trivy-image.json, trivy-fs.json,
+  zap-report.json). Never modified - traceability.
+
+--- TESTS / CI ------------------------------------------------------------------
+Q53. How did you test the project?
+  65 automated tests (normalization, correlation, scoring, comparison, scanner
+  errors, database, pages, API, deletion, numbering) + real scans verified in
+  the browser + rule tests.
+
+Q54. How do you test scanner integration without running scanners?
+  The command runner is replaced by a fake that writes sample reports; the real
+  adapters, orchestrator, engine and API run unchanged.
+
+Q55. What does the GitHub Actions workflow do?
+  On push: tests, then starts Juice Shop, runs the three scanners, evaluates,
+  writes a summary and uploads reports. Findings don't fail the pipeline.
+
+--- LIMITS / FUTURE -------------------------------------------------------------
+Q56. Main limitations?
+  No browser crawler for ZAP, limited active rules, route mapper only for simple
+  Express routes, small evaluation sample, single-user local tool.
+
+Q57. What would you add with more time?
+  Browser/authenticated DAST, more frameworks for the route mapper, user roles,
+  scheduled scans, SARIF/Jira export, EPSS exploitability data.
+
+Q58. Is it production-ready?
+  No, it's an academic mini-project: Flask dev server, SQLite, no authentication.
+  For production: WSGI server, PostgreSQL, login, HTTPS, task queue.
+
+--- TRICKY QUESTIONS ------------------------------------------------------------
+Q59. If a scanner fails, are its findings considered fixed?
+  No. They're "not re-tested". Absence of evidence isn't evidence of a fix.
+
+Q60. If ZAP exits with an error code, do you lose the results?
+  No. Status depends on whether a valid report exists; ZAP exit code 2 means
+  warnings and the report is kept.
+
+Q61. What if the scanner never finishes?
+  Timeout per scanner; the container is killed; status "timeout"; other
+  scanners' results are kept (scan "partial").
+
+Q62. Why might two scans of the same code give slightly different numbers?
+  ZAP explores differently each run and Trivy's vulnerability database updates
+  daily. The comparison rules (not observed, moved, not re-tested) prevent this
+  noise from looking like fixes.
+
+Q63. Why is the score capped at 100?
+  To keep a fixed scale for priorities (P1 >= 80) even when many bonuses apply.
+
+Q64. Can the weights be changed?
+  Yes, all in config/smartvuln.toml (severity points, multipliers, adjustments,
+  priority bands).
+
+Q65. Why "likely duplicate" instead of deleting duplicates?
+  To keep provenance and evidence from every scanner; an analyst may disagree.
+
+Q66. What is union-find?
+  An algorithm to build groups from pairwise links efficiently: if A~B and B~C,
+  then A, B, C are one group.
+
+Q67. How did you verify the fixes really work?
+  Manually (exploits fail, app still works) AND with SmartVuln: before 330 ->
+  after 7 findings, 323 resolved, 0 new.
+
+Q68. What is the difference between "partial" and "failed" scans?
+  Partial: at least one scanner produced a report. Failed: none did.
+
+Q69. Why does the comparison only allow scans of the same target?
+  Comparing two different applications has no meaning; the page refuses it.
+
+Q70. How do you show you didn't use fake data?
+  The dashboard starts empty; every number comes from scans run live; raw
+  reports are downloadable; scans can be started in front of the jury.
+
+
+Q71. Can SmartVuln scan any project, not just Juice Shop and LabShop?
+  Yes. In the Scan Center, Upload a .zip (or a single file) or give a Folder path.
+  Semgrep uses generic multi-language rulesets for such projects, Trivy scans the
+  lockfiles/secrets/config. To run ZAP too, give the URL where the app runs.
+
+Q72. Why can't ZAP scan an uploaded zip on its own?
+  ZAP is dynamic: it attacks a RUNNING application over HTTP. A zip is only source
+  code, so ZAP needs the address of the running app (e.g. http://localhost:8080).
+
+Q73. Isn't uploading archives dangerous?
+  Extraction is protected against zip-slip (no "../" or absolute paths), symbolic
+  links are skipped, size (1 GB extracted, 200 MB upload) and file count are limited,
+  and scanners only READ the code (read-only mount) - they never execute it.
+
+Q74. How does ZAP in Docker reach an app on my PC at localhost?
+  Inside a container "localhost" is the container itself, so SmartVuln rewrites
+  localhost/127.0.0.1 to host.docker.internal, Docker Desktop's name for the host.
+
+Q75. How do I compare two versions of an uploaded project?
+  Upload the new version with the SAME project name: the code is replaced, the
+  project keeps its scans, and Compare works between "before" and "after".
+
+
+################################################################################
+                         PART C - DEMONSTRATION SCRIPT
+################################################################################
+BEFORE THE EXAM (at home, 15 minutes before)
+  1. Start Docker Desktop and wait until it says running.
+  2. PowerShell in D:\SmartVuln:
+       docker compose up -d labshop juice-shop
+       .\.venv\Scripts\python.exe -m smartvuln serve
+  3. Open http://127.0.0.1:5000 - check Scan Center shows all green for LabShop.
+  4. Pull images once beforehand so nothing downloads during the demo.
+  5. Optional safety net: run "Before fixes" already and keep it, in case the
+     network/Docker is slow during the exam.
+
+LIVE DEMO (~10 minutes)
+  Step 1 - Empty start (30 s): "Everything you'll see comes from live scans."
+  Step 2 - Scan Center (1 min): select LabShop, show pre-flight, explain the
+     three scanners, name "Scan #1 - Before fixes", Start scan.
+  Step 3 - Watch (2-3 min): scanners go Pending -> Running -> Completed; show
+     the live log ("this is ZAP's spider... active scan..."). While waiting,
+     explain the architecture.
+  Step 4 - Overview (1 min): unique issues, severities, "seen by 2+ scanners",
+     top risks.
+  Step 5 - Finding detail (2 min): open the SQL injection: highlighted code,
+     "also reported by ZAP" (route mapper, rule R3), risk score breakdown (90 =
+     70+5+10+5), raw scanner record.
+  Step 6 - LabShop in browser (1 min, optional): show the SQL injection dumping
+     users -> proves it's real.
+  Step 7 - After fixes (if prepared): fixed code + rebuild
+     (docker compose up -d --build labshop) -> Scan Center shows "Running build
+     matches source" -> "Scan #2 - After fixes".
+  Step 8 - Compare (2 min): Before -> After: resolved / remaining / new, charts;
+     explain why remaining Semgrep warnings are false positives -> triage one.
+  Step 9 - History: show Delete scan with confirmation (don't actually delete
+     your demo scans), Reports page, theme switch.
+
+IF SOMETHING GOES WRONG
+  - "Docker isn't running": start Docker Desktop, click "Check again".
+  - "LabShop isn't responding": docker compose up -d labshop
+  - "Running build is out of date": docker compose up -d --build labshop
+  - Dashboard doesn't open: check the PowerShell window running "serve" is
+    still open; restart it.
+  - Scan too slow: show a scan prepared earlier and the reports.
+
+
+################################################################################
+                             PART D - CHEAT SHEET
+################################################################################
+  URLS      SmartVuln http://127.0.0.1:5000 | LabShop http://localhost:3100 |
+            Juice Shop http://localhost:3000
+  START     docker compose up -d labshop juice-shop
+            .\.venv\Scripts\python.exe -m smartvuln serve
+  REBUILD   docker compose up -d --build labshop
+  TESTS     .\.venv\Scripts\python.exe -m pytest -q tests      (80 passed)
+  LAB LOGIN alice@labshop.test / alice123
+  VERSIONS  Semgrep 1.183.0 | ZAP 2.17.0 | Trivy (schema 2) | Juice Shop v20.3.0
+            | Python 3.13 | Node 22 | Flask 3 | Chart.js 4.4.1
+  SCORE     base(90/70/45/20/5) x conf(1/0.85/0.6/0.85) + (+10 attack, +10
+            multi-scanner, +5 likelihood, +5 route handler, +5 runtime, -15 test)
+            P1>=80 P2>=60 P3>=35 P4
+  CORREL.   R1 same CVE+package | R2 same file +/-2 lines | R3 URL->handler file
+            | R4 same URL+param
+  COMPARE   new | remaining | resolved | not re-tested | not observed | moved
+  JUICE     223 findings -> 190 unique | recall 76% combined | Semgrep prec. 81%
+  LABSHOP   330 -> 7 | 323 resolved | 0 new | Trivy 290 -> 0
+  ZAP RULES 40018 SQLi, 40012/40014 XSS, 6 traversal, 90020 cmd inj., 20019
+            redirect, 40009 SSI, 90019 code inj., 0 dir browsing
+  CUSTOM    raw-sql-interpolation | request-data-code-execution |
+            substring-url-allowlist | hardcoded-crypto-key | weak-password-hash
+            + route mapper (Python)
+================================================================================

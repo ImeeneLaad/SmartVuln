@@ -63,8 +63,15 @@ def default_target(cfg: dict[str, Any]) -> str:
     return cfg["general"]["application"]
 
 
-def target_ids(cfg: dict[str, Any]) -> list[str]:
+def configured_target_ids(cfg: dict[str, Any]) -> list[str]:
+    """Targets defined in smartvuln.toml (default target first)."""
     return [default_target(cfg)] + [t for t in cfg.get("targets", {}) if t != default_target(cfg)]
+
+
+def target_ids(cfg: dict[str, Any]) -> list[str]:
+    """Configured targets followed by projects added from the Scan Center (upload / folder)."""
+    from .projects import list_projects
+    return configured_target_ids(cfg) + [p["id"] for p in list_projects(cfg)]
 
 
 def cfg_for_target(cfg: dict[str, Any], target_id: str | None) -> dict[str, Any]:
@@ -76,6 +83,10 @@ def cfg_for_target(cfg: dict[str, Any], target_id: str | None) -> dict[str, Any]
         return cfg
     overrides = cfg.get("targets", {}).get(target_id)
     if overrides is None:
+        from .projects import get_project, project_overrides
+        project = get_project(cfg, target_id)
+        if project:
+            return project_overrides(cfg, project)
         raise ValueError(f"unknown target '{target_id}' (known: {', '.join(target_ids(cfg))})")
     out = copy.deepcopy(cfg)
     out["general"]["application"] = target_id

@@ -339,3 +339,80 @@ def test_reused_number_never_mixes_old_files(cfg, fake_docker):
     assert s["id"] == 1 and not (leftover / "raw" / "old-report.json").exists()
     moved = list((Path(cfg["general"]["data_dir"]) / "scans" / "_replaced").glob("0001-*/raw/old-report.json"))
     assert len(moved) == 1                                           # moved aside, not deleted
+
+
+# ------------------------------------------------------------------------------ projects (upload / folder)
+def _zip_bytes(files):
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for name, content in files.items():
+            zf.writestr(name, content)
+    return buf.getvalue()
+
+
+def test_add_project_requires_csrf_and_valid_input(cfg):
+    import io
+    _, c, token = _client(cfg)
+    data = {"mode": "upload", "name": "x", "file": (io.BytesIO(_zip_bytes({"a.js": "1"})), "a.zip")}
+    assert c.post("/api/projects", data=data, content_type="multipart/form-data").status_code == 400
+    r = c.post("/api/projects", data={"mode": "upload", "name": "x"}, headers={"X-CSRF-Token": token},
+               content_type="multipart/form-data")
+    assert r.status_code == 400 and "Choose" in r.get_json()["error"]
+    r = c.post("/api/projects", data={"mode": "folder", "name": "x", "path": "Z:/nope/missing"},
+               headers={"X-CSRF-Token": token}, content_type="multipart/form-data")
+    assert r.status_code == 400 and "not found" in r.get_json()["error"].lower()
+    bad = {"mode": "upload", "name": "evil", "file": (io.BytesIO(_zip_bytes({"../x.js": "1"})), "e.zip")}
+    r = c.post("/api/projects", data=bad, headers={"X-CSRF-Token": token}, content_type="multipart/form-data")
+    assert r.status_code == 400 and "Unsafe" in r.get_json()["error"]
+    assert c.get("/api/projects").get_json() == []
+
+
+def test_uploaded_project_scan_and_compare(cfg, fake_docker):
+    import io
+    _, c, token = _client(cfg)
+    h = {"X-CSRF-Token": token}
+
+    def upload(version):
+        files = {"shop/server.js": f"// v{version}\nimport express from 'express'\napp.get('/x', h)\n"}
+        r = c.post("/api/projects", data={"mode": "upload", "name": "My Shop",
+                                          "file": (io.BytesIO(_zip_bytes(files)), "shop.zip")},
+                   headers=h, content_type="multipart/form-data")
+        assert r.status_code == 201, r.get_json()
+        return r.get_json()["target_id"]
+
+    pid = upload(1)
+    assert pid == "p-my-shop"
+    pre = c.get(f"/api/targets?target={pid}").get_json()
+    assert pre["target"]["kind"] == "upload" and pre["target"]["has_url"] is False
+    assert pre["scanners"]["zap"]["ready"] is False and "no app URL" in pre["scanners"]["zap"]["notes"][0]
+    assert pre["scanners"]["semgrep"]["ready"] is True
+    assert any(t["id"] == pid and t["kind"] == "upload" for t in pre["targets"])
+
+    r = c.post("/api/scans", json={"target": pid, "scanners": ["semgrep", "trivy"], "label": "Before"}, headers=h)
+    before = _wait(c, r.get_json()["scan_id"])
+    assert before["status"] == "completed" and before["application"] == pid
+    assert {x["scanner"]: x["status"] for x in before["runs"]} == {"semgrep": "success", "trivy": "success"}
+
+    upload(2)  # new version of the same project
+    r = c.post("/api/scans", json={"target": pid, "scanners": ["semgrep", "trivy"], "label": "After"}, headers=h)
+    after = _wait(c, r.get_json()["scan_id"])
+    assert after["source_ref"] != before["source_ref"]          # code changed between the scans
+    page = c.get(f"/compare?baseline={before['id']}&current={after['id']}").data.decode()
+    assert "different targets" not in page and "Resolved" in page
+    assert "My Shop" in c.get("/scans").data.decode()           # history shows the project name
+
+    # ZAP ticked without an app URL: skipped with a clear reason, Semgrep still runs
+    r = c.post("/api/scans", json={"target": pid, "scanners": ["semgrep", "zap"]}, headers=h)
+    s = _wait(c, r.get_json()["scan_id"])
+    runs = {x["scanner"]: x for x in s["runs"]}
+    assert runs["zap"]["status"] == "skipped" and "no running URL" in runs["zap"]["error"]
+    assert runs["semgrep"]["status"] == "success"
+
+
+def test_scan_center_shows_upload_folder_saved(cfg):
+    _, c, _ = _client(cfg)
+    page = c.get("/scan").data.decode()
+    for text in ("Upload", "Folder on this PC", "Saved", "Drop your project here", "Add project", "App URL"):
+        assert text in page

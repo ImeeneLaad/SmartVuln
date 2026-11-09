@@ -5,10 +5,56 @@
 
 <div class="grid split">
   <div class="panel pad">
-    <label class="field" style="max-width:420px">Target
-      <select id="target">{% for t in targets %}<option value="{{ t.id }}" {{ 'selected' if t.id == selected_target }}>{{ t.name }}</option>{% endfor %}</select>
-    </label>
-    <dl class="kv small" id="targetInfo" style="margin-bottom:6px"><dt>Status</dt><dd class="muted">Checking…</dd></dl>
+    <h3 style="margin-top:0">What to scan</h3>
+    <div class="tabs" role="tablist" aria-label="What to scan">
+      <button type="button" role="tab" class="tab" data-tab="upload">Upload</button>
+      <button type="button" role="tab" class="tab" data-tab="folder">Folder on this PC</button>
+      <button type="button" role="tab" class="tab" data-tab="saved">Saved <span class="count">{{ targets|length }}</span></button>
+    </div>
+
+    <div class="tab-panel" data-panel="upload">
+      <label class="dropzone" id="dropzone">
+        <input type="file" id="fileInput" class="sr-only">
+        <span class="dz-main"><b>Drop your project here</b> or <u>browse</u></span>
+        <span class="small muted">A .zip of the project, or a single source file · up to 200 MB · leave out node_modules</span>
+        <span class="small" id="fileName"></span>
+      </label>
+      <label class="field" style="margin-top:12px;max-width:420px">Project name<input id="upName" maxlength="80" placeholder="e.g. My web app"></label>
+    </div>
+
+    <div class="tab-panel" data-panel="folder">
+      <label class="field">Folder path<input id="folderPath" placeholder="C:\Users\you\projects\my-app" spellcheck="false"></label>
+      <label class="field" style="max-width:420px">Project name<input id="folderName" maxlength="80" placeholder="e.g. My web app"></label>
+      <p class="small muted" style="margin-top:-4px">The folder is scanned in place, read-only.</p>
+    </div>
+
+    <div class="tab-panel" data-panel="upload folder">
+      <details class="opt">
+        <summary>Optional: running app and Docker image</summary>
+        <label class="field">App URL — needed for OWASP ZAP<input id="projUrl" placeholder="http://localhost:8080" spellcheck="false"></label>
+        <label class="field">Docker image — lets Trivy scan the built image<input id="projImage" placeholder="my-app:latest" spellcheck="false"></label>
+        <p class="small muted" style="margin:0">Without a URL, Semgrep (code) and Trivy (dependencies, secrets) still run. Only local apps can be scanned.</p>
+      </details>
+      <div style="display:flex;gap:12px;align-items:center;margin-top:12px;flex-wrap:wrap">
+        <button type="button" id="addBtn">Add project</button>
+        <span class="small" id="addMsg"></span>
+      </div>
+    </div>
+
+    <div class="tab-panel" data-panel="saved">
+      <label class="field" style="max-width:420px">Target
+        <select id="target">
+          <optgroup label="Built-in apps">{% for t in targets if t.kind == 'configured' %}<option value="{{ t.id }}" {{ 'selected' if t.id == selected_target }}>{{ t.name }}</option>{% endfor %}</optgroup>
+          <optgroup label="Your projects" id="projGroup">{% for t in targets if t.kind != 'configured' %}<option value="{{ t.id }}" {{ 'selected' if t.id == selected_target }}>{{ t.name }}</option>{% endfor %}</optgroup>
+        </select>
+      </label>
+    </div>
+
+    <div class="selected" id="selectedBox">
+      <div class="small muted">Selected</div>
+      <div id="selectedName" class="sel-name">—</div>
+      <dl class="kv small" id="targetInfo"></dl>
+    </div>
 
     <h3 style="margin-top:18px">Scanners</h3>
     <div id="scanners">
@@ -65,20 +111,34 @@
   const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
   const dur = s => s == null ? '—' : (s >= 60 ? Math.floor(s / 60) + 'm ' + String(Math.floor(s % 60)).padStart(2, '0') + 's' : Math.floor(s) + 's');
   const FINISHED = ['completed', 'partial', 'failed', 'interrupted'];
-  let preflight = null, focus = {{ focus|tojson }}, lastLog = 0, timer = null;
+  let preflight = null, preflightSeq = 0, focus = {{ focus|tojson }}, lastLog = 0, timer = null;
   const boxes = () => [...document.querySelectorAll('input[name=scanner]')];
+  const zapBox = () => document.querySelector('input[name=scanner][value=zap]');
+
+  /* What is being scanned: the Saved dropdown, or the project just added in the Upload / Folder tab. */
+  let tab = {{ ('saved' if selected_target else 'upload')|tojson }};
+  const added = { upload: null, folder: null };
+  const currentTarget = () => tab === 'saved' ? $('target').value : added[tab];
+
+  function showTab(name) {
+    tab = name;
+    document.querySelectorAll('.tab').forEach(b => { const on = b.dataset.tab === name; b.classList.toggle('active', on); b.setAttribute('aria-selected', on); });
+    document.querySelectorAll('.tab-panel').forEach(p => { p.hidden = !p.dataset.panel.split(' ').includes(name); });
+    loadPreflight();
+  }
 
   /* Turn pre-flight data into short, actionable messages; technical details stay in a tooltip. */
   function problems() {
     if (!preflight) return [];
-    const out = [], t = preflight.target, name = $('target').selectedOptions[0].text.replace(/ \(.*\)$/, '');
+    const out = [], t = preflight.target, name = t.name.replace(/ \(.*\)$/, '');
     const sel = boxes().filter(c => c.checked).map(c => c.value);
     if (preflight.running_scan) out.push(['Scan #' + preflight.running_scan.id + ' is still running — wait for it to finish.', '']);
     if (!preflight.docker.available) out.push(['Docker isn’t running. Start Docker Desktop, then check again.', preflight.docker.detail]);
     if (!sel.length) out.push(['Select at least one scanner.', '']);
     if (!t.source_present && sel.includes('semgrep')) out.push(['Source folder is missing: ' + t.source_path, '']);
     if (!t.allowed && sel.includes('zap')) out.push(['This host is not in the allow-list, so ZAP will skip it.', '']);
-    else if (!t.reachable && sel.includes('zap')) out.push([name + ' isn’t responding — start it: docker compose up -d ' + t.id, t.probe]);
+    else if (t.has_url && !t.reachable && sel.includes('zap'))
+      out.push([name + ' isn’t responding at ' + (t.browse_url || t.url) + (t.kind === 'configured' ? ' — start it: docker compose up -d ' + t.id : ' — start the app first'), t.probe]);
     if (t.build && !t.build.current && (sel.includes('zap') || sel.includes('trivy')))
       out.push(['The running app is older than its source — rebuild: docker compose up -d --build ' + t.id, '']);
     return out;
@@ -86,39 +146,64 @@
 
   function refreshStart() {
     const p = problems();
-    const blocking = !preflight || preflight.running_scan || !preflight.docker.available || !boxes().some(c => c.checked);
+    const blocking = !currentTarget() || !preflight || preflight.running_scan || !preflight.docker.available || !boxes().some(c => c.checked);
     $('startBtn').disabled = !!blocking;
     $('problems').innerHTML = p.map(([msg, detail]) =>
       '<li' + (detail ? ' title="' + esc(detail) + '"' : '') + '><span class="mark warn">!</span><span>' + esc(msg) + '</span></li>').join('');
   }
 
   async function loadPreflight() {
+    const id = currentTarget();
+    if (!id) {  // Upload / Folder tab before a project was added
+      preflightSeq++;  // discard any check still in flight for a previous selection
+      preflight = null;
+      $('selectedName').textContent = tab === 'upload' ? 'Nothing yet — add a file above' : 'Nothing yet — add a folder above';
+      $('targetInfo').innerHTML = '';
+      $('checks').innerHTML = '<li class="muted">Add a project to see its checks.</li>';
+      ['semgrep', 'trivy', 'zap'].forEach(n => { $('ready-' + n).innerHTML = ''; });
+      refreshStart();
+      return;
+    }
     $('checks').innerHTML = '<li class="muted">Checking…</li>';
     $('startBtn').disabled = true;
-    preflight = await (await fetch('/api/targets?target=' + encodeURIComponent($('target').value))).json();
+    const seq = ++preflightSeq;  // switching quickly sends several checks: only the latest answer may update the page
+    const data = await (await fetch('/api/targets?target=' + encodeURIComponent(id))).json();
+    if (seq !== preflightSeq) return;
+    preflight = data;
     const t = preflight.target, b = t.build;
+    const up = t.reachable ? '<span class="ok">● up</span>' : '<span class="bad">● down</span>';
+    const kindLabel = { configured: 'built-in app', upload: 'uploaded project', folder: 'folder on this PC' }[t.kind] || '';
+    $('selectedName').innerHTML = esc(t.name) + ' <span class="chip">' + kindLabel + '</span>';
     $('targetInfo').innerHTML =
-      (t.browse_url ? '<dt>Open</dt><dd><a href="' + esc(t.browse_url) + '" target="_blank" rel="noopener">' + esc(t.browse_url) + '</a> ' +
-        (t.reachable ? '<span class="ok">● up</span>' : '<span class="bad">● down</span>') + '</dd>' : '') +
-      '<dt>Scanned as</dt><dd><span class="mono">' + esc(t.url) + '</span> <span class="muted">(inside Docker)</span>' +
-        (t.browse_url ? '' : ' ' + (t.reachable ? '<span class="ok">● up</span>' : '<span class="bad">● down</span>')) + '</dd>' +
-      '<dt>Source</dt><dd><span class="mono">' + esc(t.source_path) + '</span>' + (t.source_present ? ' <span class="muted">' + esc(t.source_ref) + '</span>' : ' <span class="bad">missing</span>') + '</dd>' +
-      '<dt>Image</dt><dd><span class="mono">' + esc(t.image) + '</span></dd>';
+      (t.has_url ? '<dt>Open</dt><dd><a href="' + esc(t.browse_url || t.url) + '" target="_blank" rel="noopener">' + esc(t.browse_url || t.url) + '</a> ' + up + '</dd>'
+                 : '<dt>App URL</dt><dd class="muted">none — OWASP ZAP not available</dd>') +
+      (t.kind === 'configured' ? '<dt>Scanned as</dt><dd><span class="mono">' + esc(t.url) + '</span> <span class="muted">(inside Docker)</span></dd>' : '') +
+      '<dt>Source</dt><dd><span class="mono">' + esc(t.kind === 'upload' ? t.detail : t.source_path) + '</span>' +
+        (t.source_present ? ' <span class="muted">' + (t.files ? t.files + ' files · ' : '') + esc(t.source_ref) + '</span>' : ' <span class="bad">missing</span>') + '</dd>' +
+      (t.image ? '<dt>Image</dt><dd><span class="mono">' + esc(t.image) + '</span></dd>' : '');
+    // OWASP ZAP needs a running app: disable it for projects without a URL.
+    const zb = zapBox();
+    if (!t.has_url) { if (!zb.disabled) zb.dataset.was = zb.checked; zb.checked = false; zb.disabled = true; }
+    else if (zb.disabled) { zb.disabled = false; zb.checked = zb.dataset.was !== 'false'; }
     const docker = preflight.docker.available;
-    const checks = [  // [ok, text, technical detail for the tooltip]
+    const checks = [  // [ok, text, technical detail for the tooltip]; ok=null -> not applicable
       [docker, docker ? 'Docker ' + preflight.docker.detail : 'Docker not running', docker ? '' : preflight.docker.detail],
       [t.source_present, t.source_present ? 'Source present' : 'Source missing', ''],
-      [t.allowed, t.allowed ? 'Host in local allow-list' : 'Host not allowed', ''],
-      [t.reachable, t.reachable ? 'App responding' : 'App not responding', t.probe],
     ];
+    if (t.has_url) {
+      checks.push([t.allowed, t.allowed ? 'Host in local allow-list' : 'Host not allowed', '']);
+      checks.push([t.reachable, t.reachable ? 'App responding' : 'App not responding', t.probe]);
+    } else checks.push([null, 'No app URL — dynamic test (ZAP) skipped', '']);
     if (b) checks.push([b.current, b.current ? 'Running build matches source' : 'Running build is out of date', '']);
     for (const [name, s] of Object.entries(preflight.scanners)) {
-      $('ready-' + name).innerHTML = s.ready ? '<span class="ok">Ready</span>' : '<span class="bad">Not ready</span>';
+      $('ready-' + name).innerHTML = s.ready ? '<span class="ok">Ready</span>'
+        : (name === 'zap' && !t.has_url ? '<span class="muted">Needs app URL</span>' : '<span class="bad">Not ready</span>');
       const pending = docker && s.notes.some(n => /not pulled/.test(n));
+      if (name === 'zap' && !t.has_url) continue;
       checks.push([s.ready, s.label + (!docker ? ' — needs Docker' : pending ? ' — image downloads on first run' : ''), s.notes.join('; ')]);
     }
     $('checks').innerHTML = checks.map(([ok, txt, detail]) => '<li' + (detail ? ' title="' + esc(detail) + '"' : '') + '><span class="mark ' +
-      (ok ? 'ok">✓' : 'bad">✕') + '</span><span>' + esc(txt) + '</span></li>').join('');
+      (ok === null ? 'muted">–' : ok ? 'ok">✓' : 'bad">✕') + '</span><span' + (ok === null ? ' class="muted"' : '') + '>' + esc(txt) + '</span></li>').join('');
     refreshStart();
   }
 
@@ -126,7 +211,7 @@
     $('startBtn').disabled = true;
     $('startMsg').textContent = 'Starting…';
     const r = await fetch('/api/scans', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
-      body: JSON.stringify({ target: $('target').value, scanners: boxes().filter(c => c.checked).map(c => c.value), label: $('label').value }) });
+      body: JSON.stringify({ target: currentTarget(), scanners: boxes().filter(c => c.checked).map(c => c.value), label: $('label').value }) });
     const data = await r.json().catch(() => ({}));
     if (r.status === 202) { $('startMsg').textContent = ''; watch(data.scan_id, true); }
     else { $('startMsg').innerHTML = '<span class="bad">' + esc(data.error || ('HTTP ' + r.status)) + '</span>'; if (data.running_scan) watch(data.running_scan, false); }
@@ -193,12 +278,60 @@
   boxes().forEach(c => c.addEventListener('change', refreshStart));
   /* Suggest the next per-target scan number as the name (used as-is if the field is left empty). */
   const nextNumbers = {{ next_numbers|tojson }};
-  function suggestName() { $('label').placeholder = 'Scan #' + (nextNumbers[$('target').value] || 1) + ' — e.g. Before fixes'; }
-  $('target').addEventListener('change', () => { suggestName(); loadPreflight(); });
+  function suggestName() { $('label').placeholder = 'Scan #' + (Object.values(nextNumbers)[0] || 1) + ' — e.g. Before fixes'; }
+  $('target').addEventListener('change', loadPreflight);
   suggestName();
+
+  /* Tabs */
+  document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
+
+  /* Upload: browse or drag & drop */
+  let file = null;
+  function pickFile(f) {
+    file = f || null;
+    $('fileName').innerHTML = file ? '✓ ' + esc(file.name) + ' <span class="muted">(' + (file.size / 1048576).toFixed(1) + ' MB)</span>' : '';
+    if (file && !$('upName').value) $('upName').value = file.name.replace(/\.(zip|tar|gz|tgz)$/i, '').replace(/[_-]+/g, ' ');
+    $('dropzone').classList.toggle('has-file', !!file);
+  }
+  $('fileInput').addEventListener('change', e => pickFile(e.target.files[0]));
+  const dz = $('dropzone');
+  ['dragenter', 'dragover'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('drag'); }));
+  ['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('drag'); }));
+  dz.addEventListener('drop', e => pickFile(e.dataTransfer.files[0]));
+
+  /* Add project (upload or folder) */
+  $('addBtn').addEventListener('click', async () => {
+    const fd = new FormData();
+    fd.append('mode', tab);
+    fd.append('url', $('projUrl').value.trim());
+    fd.append('image', $('projImage').value.trim());
+    if (tab === 'upload') {
+      if (!file) { $('addMsg').innerHTML = '<span class="bad">Choose a file first.</span>'; return; }
+      fd.append('file', file);
+      fd.append('name', $('upName').value.trim() || file.name);
+    } else {
+      fd.append('path', $('folderPath').value.trim());
+      fd.append('name', $('folderName').value.trim());
+    }
+    $('addBtn').disabled = true;
+    $('addMsg').textContent = tab === 'upload' ? 'Uploading…' : 'Adding…';
+    try {
+      const r = await fetch('/api/projects', { method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: fd });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { $('addMsg').innerHTML = '<span class="bad">' + esc(data.error || ('HTTP ' + r.status)) + '</span>'; return; }
+      const p = data.project;
+      let opt = [...$('target').options].find(o => o.value === p.id);
+      if (!opt) { opt = new Option(p.name, p.id); $('projGroup').appendChild(opt); }
+      else opt.text = p.name;
+      $('target').value = p.id;
+      added[tab] = p.id;
+      $('addMsg').innerHTML = '<span class="ok">✓ Added' + (p.files ? ' — ' + p.files + ' files' : '') + '. Choose scanners and start.</span>';
+      loadPreflight();
+    } finally { $('addBtn').disabled = false; }
+  });
   $('startBtn').addEventListener('click', start);
   $('recheck').addEventListener('click', e => { e.preventDefault(); loadPreflight(); });
-  loadPreflight();
+  showTab(tab);
   if (focus) watch(focus, true);
 })();
 </script>

@@ -157,6 +157,21 @@ later scan of the same target had been compared against the deleted one, that sc
 comparison report is regenerated against its new predecessor. Running scans cannot be
 deleted.
 
+**Scanning any project (Upload / Folder).** At the top of the Scan Center, *What to scan* has three tabs:
+- **Upload:** drop a `.zip` of a project, or a single source file (up to 200 MB). It is extracted
+  safely into `data/projects/<id>/source/`: paths escaping the folder (zip-slip) are refused,
+  symbolic links are skipped, and size and file counts are limited.
+- **Folder on this PC:** paste a folder path. It is scanned in place, read-only.
+- **Saved:** the built-in apps (Juice Shop, LabShop) and every project added before.
+
+Optionally, give the **app URL** (where the app is running, local hosts only) so OWASP ZAP can
+test it, and a **Docker image** for Trivy's image scan. Without a URL, Semgrep (code, generic
+multi-language rulesets) and Trivy (lockfiles, secrets, misconfiguration) still run, and ZAP is
+disabled with "Needs app URL". ZAP runs in a container, so `localhost` in the URL is translated
+to `host.docker.internal` to reach an app running on this PC. Uploading again with the same
+name replaces that project's code, so its scans can be compared before and after. API:
+`POST /api/projects` (multipart: `mode`, `name`, `file` or `path`, `url`, `image`), `GET /api/projects`.
+
 The Scan Center needs the dashboard to run **on the host** (`python -m smartvuln serve`),
 because it starts the scanner containers through the local Docker CLI. The optional
 dashboard container is read-only.

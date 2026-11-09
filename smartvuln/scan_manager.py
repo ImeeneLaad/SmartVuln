@@ -21,7 +21,8 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from .config import cfg_for_target, resolve, target_ids
+from .config import cfg_for_target, configured_target_ids, resolve, target_ids
+from .projects import create_from_folder, create_from_upload, list_projects
 from .sourcehash import source_hash
 from .database.store import ScanConflict, Store
 from .orchestrator import ADAPTERS, _source_ref, run_scan
@@ -75,17 +76,31 @@ class ScanManager:
 
     # ------------------------------------------------------------------ targets
     def targets(self) -> list[dict[str, Any]]:
-        """All configured scan targets (default target first)."""
+        """All scan targets: configured ones (default first), then projects added in the Scan Center."""
         out = []
+        projects = {p["id"]: p for p in list_projects(self.cfg)}
         for tid in target_ids(self.cfg):
             c = cfg_for_target(self.cfg, tid)
             g, t, s = c["general"], c["target"], c["source"]
+            p = projects.get(tid)
             out.append({"id": tid, "name": g.get("display_name", tid), "url": t["url"],
                         "healthcheck_url": t["healthcheck_url"], "browse_url": t.get("browse_url", ""),
                         "source_path": s["path"],
                         "image": s.get("image", ""), "allowed_hosts": t.get("allowed_hosts", []),
-                        "reports_source_hash": bool(t.get("reports_source_hash"))})
+                        "reports_source_hash": bool(t.get("reports_source_hash")),
+                        "kind": p["kind"] if p else "configured",
+                        "detail": (p.get("upload_name") or p["source_path"]) if p else "",
+                        "files": p.get("files") if p else None})
         return out
+
+    # ------------------------------------------------------------------ projects
+    def add_upload(self, name: str, filename: str, stream, url: str = "", image: str = "") -> dict[str, Any]:
+        with self._lock:
+            return create_from_upload(self.cfg, name, filename, stream, url, image, set(configured_target_ids(self.cfg)))
+
+    def add_folder(self, name: str, path: str, url: str = "", image: str = "") -> dict[str, Any]:
+        with self._lock:
+            return create_from_folder(self.cfg, name, path, url, image, set(configured_target_ids(self.cfg)))
 
     def target(self, target_id: str | None) -> dict[str, Any]:
         targets = self.targets()
@@ -101,17 +116,19 @@ class ScanManager:
         cfg = cfg_for_target(self.cfg, target["id"])
         src = resolve(target["source_path"])
         images = {name: cfg.get(name, {}).get("image", "") for name in ADAPTERS}
+        has_url = bool(target["url"])  # uploaded/folder projects may have no running app (SAST + SCA only)
         with ThreadPoolExecutor(max_workers=6) as pool:
             f_docker = pool.submit(docker_available)
-            f_probe = pool.submit(probe_url, target["healthcheck_url"])
+            f_probe = pool.submit(probe_url, target["healthcheck_url"]) if has_url else None
             f_images = {n: pool.submit(image_present, img) for n, img in images.items() if img}
             f_target_img = pool.submit(image_present, target["image"]) if target["image"] else None
             docker_ok, docker_info = f_docker.result()
-            probe = f_probe.result()
+            probe = f_probe.result() if f_probe else {"reachable": False, "detail": "no app URL"}
             present = {n: f.result() for n, f in f_images.items()} if docker_ok else {n: False for n in f_images}
             target_img = f_target_img.result() if (f_target_img and docker_ok) else False
         try:
-            check_target_allowed(target["url"], target["allowed_hosts"])
+            if has_url:
+                check_target_allowed(target["url"], target["allowed_hosts"])
             allowed, allowed_msg = True, "target host is in the local allow-list"
         except TargetNotAllowed as exc:
             allowed, allowed_msg = False, str(exc)
@@ -131,7 +148,10 @@ class ScanManager:
                 ready = False
                 notes.append("source checkout missing (scripts/fetch_target.sh)")
             if name == "zap":
-                if not allowed:
+                if not has_url:
+                    ready = False
+                    notes.append("no app URL - ZAP needs the address where the app is running")
+                elif not allowed:
                     ready = False
                     notes.append(allowed_msg)
                 elif not probe["reachable"]:
@@ -145,8 +165,8 @@ class ScanManager:
         return {
             "target": {**target, "source_ref": _source_ref(src) if source_ok else "", "source_present": source_ok,
                        "reachable": probe["reachable"], "probe": probe["detail"], "allowed": allowed,
-                       "image_present": target_img, "build": build},
-            "targets": [{"id": t["id"], "name": t["name"]} for t in self.targets()],
+                       "image_present": target_img, "build": build, "has_url": has_url},
+            "targets": [{"id": t["id"], "name": t["name"], "kind": t["kind"]} for t in self.targets()],
             "docker": {"available": docker_ok, "detail": docker_info},
             "scanners": scanners,
             "running_scan": {"id": running["id"], "started_at": running["started_at"]} if running else None,
